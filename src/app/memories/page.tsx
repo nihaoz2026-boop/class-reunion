@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 type Message = {
   id: number;
@@ -11,74 +11,53 @@ type Message = {
   color: string;
 };
 
-const initialMessages: Message[] = [
-  {
-    id: 1,
-    author: "Nguyễn Văn A",
-    text: "Mình nhớ nhất là những buổi chiều nắng vàng rực rỡ, cả lớp cùng nhau chơi bóng đá. 4 năm bên nhau thật đẹp! 💛",
-    date: "2025-06-15",
-    initials: "NA",
-    color: "bg-amber-200",
-  },
-  {
-    id: 2,
-    author: "Trần Thị B",
-    text: "Cảm ơn tất cả mọi người đã luôn bên nhau. Lớp A8 là gia đình thứ hai của mình! 🥰",
-    date: "2025-06-14",
-    initials: "TB",
-    color: "bg-pink-200",
-  },
-  {
-    id: 3,
-    author: "Lê Hoàng C",
-    text: "Chưa bao giờ quên những đêm ôn thi cuối cấp, cả lớp cùng nhau cố gắng. We did it! 🎉",
-    date: "2025-06-13",
-    initials: "HC",
-    color: "bg-blue-200",
-  },
-];
-
-const colors = ["bg-amber-200", "bg-pink-200", "bg-blue-200", "bg-green-200", "bg-violet-200", "bg-orange-200"];
-
 export default function MemoriesPage() {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [name, setName] = useState("");
   const [text, setText] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [sending, setSending] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    fetch("/api/messages")
+      .then((r) => r.json())
+      .then((data) => {
+        setMessages(data);
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !text.trim()) return;
+    if (!name.trim() || !text.trim() || sending) return;
 
-    const initials = name
-      .split(" ")
-      .map((w) => w[0])
-      .join("")
-      .toUpperCase()
-      .slice(0, 2);
-
-    const newMsg: Message = {
-      id: Date.now(),
-      author: name.trim(),
-      text: text.trim(),
-      date: new Date().toISOString().split("T")[0],
-      initials,
-      color: colors[Math.floor(Math.random() * colors.length)],
-    };
-
-    setMessages([newMsg, ...messages]);
-    setName("");
-    setText("");
+    setSending(true);
+    try {
+      const res = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ author: name.trim(), text: text.trim() }),
+      });
+      const msg = await res.json();
+      if (msg.error) throw new Error(msg.error);
+      setMessages([msg, ...messages]);
+      setName("");
+      setText("");
+    } catch {
+      alert("Có lỗi xảy ra, thử lại sau!");
+    }
+    setSending(false);
   };
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-12">
       <div className="mb-10 text-center">
-        <h1 className="mb-2 text-4xl font-bold text-accent-dark">💌 Lời nhắn kỉ niệm</h1>
-        <p className="text-secondary">Gửi những lời nhắn yêu thương đến mọi người</p>
+        <h1 className="mb-2 text-3xl font-bold text-accent-dark sm:text-4xl" style={{ textShadow: "0 3px 6px rgba(139,94,60,0.15)" }}>💌 Lời nhắn kỉ niệm</h1>
+        <p className="text-secondary" style={{ textShadow: "0 1px 2px rgba(139,94,60,0.08)" }}>Gửi những lời nhắn yêu thương đến mọi người</p>
       </div>
 
-      {/* Form */}
-      <form onSubmit={handleSubmit} className="mb-12 rounded-2xl border border-border bg-card p-6 shadow-sm">
+      <form onSubmit={handleSubmit} className="card-bubble mb-12 p-6">
         <h2 className="mb-4 text-lg font-bold text-accent-dark">Viết lời nhắn</h2>
         <div className="mb-3">
           <input
@@ -100,34 +79,37 @@ export default function MemoriesPage() {
         </div>
         <button
           type="submit"
-          className="rounded-full bg-accent px-6 py-2.5 text-sm font-semibold text-white shadow-md transition-all hover:bg-accent-dark hover:shadow-lg"
+          disabled={sending}
+          className="btn-bubble btn-bubble-primary disabled:opacity-50"
         >
-          Gửi lời nhắn 💌
+          {sending ? "Đang gửi..." : "Gửi lời nhắn 💌"}
         </button>
       </form>
 
-      {/* Messages */}
-      <div className="space-y-4">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className="rounded-2xl border border-border bg-card p-5 shadow-sm transition-all hover:shadow-md"
-          >
-            <div className="mb-3 flex items-center gap-3">
-              <div
-                className={`flex h-10 w-10 items-center justify-center rounded-full ${msg.color} text-sm font-bold text-accent-dark`}
-              >
-                {msg.initials}
+      {!loaded ? (
+        <p className="text-center text-secondary">Đang tải...</p>
+      ) : messages.length === 0 ? (
+        <p className="text-center text-secondary">Chưa có lời nhắn nào. Hãy là người đầu tiên! ✨</p>
+      ) : (
+        <div className="space-y-3 sm:space-y-4">
+          {messages.map((msg) => (
+            <div key={msg.id} className="card-bubble p-3 sm:p-4 md:p-5">
+              <div className="mb-2 flex items-center gap-2 sm:mb-3 sm:gap-3">
+                <div
+                  className={`flex h-8 w-8 items-center justify-center rounded-full ${msg.color} text-xs font-bold text-accent-dark sm:h-10 sm:w-10 sm:text-sm`}
+                >
+                  {msg.initials}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-accent-dark sm:text-base">{msg.author}</p>
+                  <p className="text-[10px] text-secondary sm:text-xs">{msg.date}</p>
+                </div>
               </div>
-              <div>
-                <p className="font-semibold text-accent-dark">{msg.author}</p>
-                <p className="text-xs text-secondary">{msg.date}</p>
-              </div>
+              <p className="text-xs text-secondary sm:text-sm md:text-base" style={{ lineHeight: "1.6" }}>{msg.text}</p>
             </div>
-            <p className="text-secondary leading-relaxed">{msg.text}</p>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

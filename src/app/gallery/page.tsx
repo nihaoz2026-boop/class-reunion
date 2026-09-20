@@ -4,83 +4,190 @@ import { useState } from "react";
 
 type Photo = {
   id: number;
-  title: string;
-  category: string;
   color: string;
 };
 
-const categories = ["Tất cả", "Lớp học", "Hoạt động", "Dã ngoại", "Tốt nghiệp"];
+type Event = {
+  title: string;
+  photos: Photo[];
+};
 
-const photos: Photo[] = [
-  { id: 1, title: "Ngày đầu nhập học", category: "Lớp học", color: "bg-amber-100" },
-  { id: 2, title: "Giờ học vui vẻ", category: "Lớp học", color: "bg-blue-100" },
-  { id: 3, title: "Chào mừng 20/11", category: "Hoạt động", color: "bg-pink-100" },
-  { id: 4, title: "Bóng đá lớp A8", category: "Hoạt động", color: "bg-green-100" },
-  { id: 5, title: "Dã ngoại cuối năm", category: "Dã ngoại", color: "bg-emerald-100" },
-  { id: 6, title: "Cắm trại đêm", category: "Dã ngoại", color: "bg-orange-100" },
-  { id: 7, title: "Lễ tốt nghiệp THCS 🎓", category: "Tốt nghiệp", color: "bg-yellow-100" },
-  { id: 8, title: "Chụp ảnh kỷ yếu", category: "Tốt nghiệp", color: "bg-rose-100" },
-  { id: 9, title: "Họp mặt lớp", category: "Hoạt động", color: "bg-violet-100" },
-  { id: 10, title: "ThiOnline tiếng Anh", category: "Lớp học", color: "bg-cyan-100" },
-  { id: 11, title: "Phụ vụ cộng đồng", category: "Hoạt động", color: "bg-lime-100" },
-  { id: 12, title: "Ngày cuối năm học", category: "Lớp học", color: "bg-amber-100" },
+type Group = {
+  name: string;
+  emoji: string;
+  gradient: string;
+  events: Event[];
+};
+
+const groups: Group[] = [
+  {
+    name: "6A8",
+    emoji: "📗",
+    gradient: "from-amber-100 to-blue-100",
+    events: [
+      { title: "Ngày đầu nhập học", photos: [{ id: 1, color: "bg-amber-100" }] },
+      { title: "Lớp học đầu năm", photos: [{ id: 2, color: "bg-blue-100" }] },
+      { title: "Kỷ niệm 20/11 năm nhất", photos: [{ id: 5, color: "bg-violet-100" }] },
+      { title: "Học kỳ 1", photos: [{ id: 6, color: "bg-cyan-100" }] },
+    ],
+  },
+  {
+    name: "7A8",
+    emoji: "📘",
+    gradient: "from-pink-100 to-green-100",
+    events: [
+      { title: "Năm học mới 7A8", photos: [{ id: 7, color: "bg-amber-100" }] },
+      { title: "Giờ thực hành", photos: [{ id: 8, color: "bg-blue-100" }] },
+      { title: "Chào mừng 20/11", photos: [{ id: 10, color: "bg-green-100" }] },
+      { title: "Cuối kỳ lớp 7", photos: [{ id: 12, color: "bg-cyan-100" }] },
+    ],
+  },
+  {
+    name: "8A8",
+    emoji: "📙",
+    gradient: "from-violet-100 to-cyan-100",
+    events: [
+      { title: "Mở đầu lớp 8", photos: [{ id: 13, color: "bg-amber-100" }] },
+      { title: "Thi giữa kỳ", photos: [{ id: 15, color: "bg-pink-100" }] },
+      { title: "20/11 lớp 8", photos: [{ id: 16, color: "bg-green-100" }] },
+      { title: "Tổng kết năm học", photos: [{ id: 18, color: "bg-cyan-100" }] },
+    ],
+  },
+  {
+    name: "9A8",
+    emoji: "📕",
+    gradient: "from-rose-100 to-yellow-100",
+    events: [
+      { title: "Bước vào lớp 9", photos: [{ id: 19, color: "bg-amber-100" }] },
+      { title: "Ôn thi cuối cấp", photos: [{ id: 20, color: "bg-blue-100" }] },
+      { title: "Lớp học cuối cùng", photos: [{ id: 21, color: "bg-pink-100" }] },
+      { title: "Về nguồn cuối năm", photos: [{ id: 22, color: "bg-emerald-100" }] },
+      { title: "Chụp ảnh kỷ yếu", photos: [{ id: 23, color: "bg-rose-100" }] },
+      { title: "Lễ tốt nghiệp THCS 🎓", photos: [{ id: 24, color: "bg-yellow-100" }] },
+      { title: "Ngày cuối cấp", photos: [{ id: 25, color: "bg-orange-100" }] },
+    ],
+  },
+  {
+    name: "Hoạt động",
+    emoji: "🎭",
+    gradient: "from-lime-100 to-emerald-100",
+    events: [
+      { title: "Họp mặt lớp", photos: [{ id: 26, color: "bg-violet-100" }] },
+    ],
+  },
+  {
+    name: "Tốt nghiệp",
+    emoji: "🎓",
+    gradient: "from-yellow-100 to-orange-100",
+    events: [
+      { title: "Lễ tốt nghiệp", photos: [{ id: 28, color: "bg-yellow-100" }] },
+      { title: "Chụp ảnh kỷ yếu", photos: [{ id: 29, color: "bg-rose-100" }] },
+    ],
+  },
 ];
 
 export default function GalleryPage() {
-  const [active, setActive] = useState("Tất cả");
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [openEvent, setOpenEvent] = useState<string | null>(null);
 
-  const filtered = active === "Tất cả" ? photos : photos.filter((p) => p.category === active);
+  const currentGroup = groups.find((g) => g.name === openGroup);
+  const currentEvent = currentGroup?.events.find((e) => e.title === openEvent);
+
+  const closeAll = () => {
+    setOpenGroup(null);
+    setOpenEvent(null);
+  };
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-12">
-      <div className="mb-8 text-center">
-        <h1 className="mb-2 text-4xl font-bold text-accent-dark">📸 Gallery</h1>
-        <p className="text-secondary">Những khoảnh khắc đáng nhớ của lớp A8 THCS Tân Nhuận Đông</p>
+    <div className="mx-auto max-w-6xl px-3 py-8 sm:px-4 sm:py-12">
+      <div className="mb-6 text-center sm:mb-8">
+        <h1 className="mb-2 text-2xl font-bold text-accent-dark sm:text-3xl md:text-4xl" style={{ textShadow: "0 3px 6px rgba(139,94,60,0.15)" }}>📸 Ảnh lớp</h1>
+        <p className="text-sm text-secondary sm:text-base" style={{ textShadow: "0 1px 2px rgba(139,94,60,0.08)" }}>Chọn thư mục → chọn khoảnh khắc → xem ảnh</p>
       </div>
 
-      <div className="mb-8 flex flex-wrap justify-center gap-2">
-        {categories.map((cat) => (
+      {/* Level 1: Group cards */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 md:gap-5">
+        {groups.map((g, i) => (
           <button
-            key={cat}
-            onClick={() => setActive(cat)}
-            className={`rounded-full px-4 py-2 text-sm font-medium transition-all ${
-              active === cat
-                ? "bg-accent text-white shadow-md"
-                : "border border-border bg-card text-secondary hover:border-accent hover:text-accent"
-            }`}
+            key={g.name}
+            onClick={() => { setOpenGroup(g.name); setOpenEvent(null); }}
+            className={`bg-gradient-to-br ${g.gradient} gallery-card card-bubble group flex aspect-[4/3] flex-col items-center justify-center gap-1 rounded-xl border-2 border-accent/20 p-3 text-center transition-all hover:border-accent/50 hover:scale-105 cursor-pointer sm:aspect-square sm:gap-3 sm:rounded-3xl sm:p-6 md:p-8 lg:p-10`}
+            style={{ animationDelay: `${i * 0.08}s` }}
           >
-            {cat}
+            <span className="text-2xl sm:text-4xl md:text-5xl">{g.emoji}</span>
+            <h2 className="text-sm font-bold text-accent-dark sm:text-lg md:text-2xl" style={{ textShadow: "0 2px 4px rgba(139,94,60,0.1)" }}>{g.name}</h2>
+            <span className="rounded-full bg-card/60 px-1.5 py-0.5 text-[10px] font-semibold text-secondary sm:px-3 sm:text-sm">{g.events.length} khoảnh khắc</span>
           </button>
         ))}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-        {filtered.map((photo) => (
+      {/* Level 2: Events in group */}
+      {openGroup && !openEvent && (
+        <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/40 p-3 pt-6 backdrop-blur-sm sm:p-4 sm:pt-10" onClick={closeAll}>
           <div
-            key={photo.id}
-            className={`group ${photo.color} flex aspect-square items-center justify-center rounded-2xl p-6 text-center shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg`}
+            className="w-full max-w-4xl rounded-2xl border-2 border-accent/30 bg-[var(--bg-primary)] p-4 shadow-2xl animate-bounce-in sm:rounded-3xl sm:p-6"
+            onClick={(e) => e.stopPropagation()}
           >
-            <div>
-              <span className="mb-2 block text-5xl opacity-60">🖼️</span>
-              <p className="font-semibold text-accent-dark">{photo.title}</p>
-              <span className="mt-1 inline-block rounded-full bg-card/60 px-2 py-0.5 text-xs text-secondary">
-                {photo.category}
-              </span>
+            <div className="mb-4 flex items-center justify-between sm:mb-6">
+              <h2 className="text-lg font-bold text-accent-dark sm:text-xl md:text-2xl" style={{ textShadow: "0 2px 4px rgba(139,94,60,0.1)" }}>
+                {currentGroup?.emoji} {openGroup}
+              </h2>
+              <button onClick={closeAll} className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/10 text-lg font-bold text-accent-dark transition hover:bg-accent/20 sm:h-10 sm:w-10 sm:text-xl">
+                ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-3 md:grid-cols-3">
+              {currentGroup?.events.map((evt, i) => (
+                <button
+                  key={evt.title}
+                  onClick={() => setOpenEvent(evt.title)}
+                  className={`${evt.photos[0]?.color || "bg-amber-100"} gallery-card card-bubble flex aspect-square flex-col items-center justify-center gap-1 rounded-xl p-3 text-center transition-all hover:scale-105 cursor-pointer sm:gap-2 sm:rounded-2xl sm:p-5 md:p-6`}
+                  style={{ animationDelay: `${i * 0.06}s` }}
+                >
+                  <span className="text-2xl opacity-60 sm:text-3xl">🖼️</span>
+                  <p className="text-xs font-bold text-accent-dark sm:text-sm md:text-base">{evt.title}</p>
+                  <span className="rounded-full bg-card/60 px-1.5 py-0.5 text-[10px] text-secondary sm:px-2 sm:text-xs">{evt.photos.length} ảnh</span>
+                </button>
+              ))}
             </div>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
-      <div className="mt-10 rounded-2xl border-2 border-dashed border-accent/30 bg-card/50 p-8 text-center">
-        <p className="mb-2 text-lg font-semibold text-accent-dark">
-          Gợi ý: Thay ảnh Placeholder bằng ảnh thật
-        </p>
-        <p className="text-sm text-secondary">
-          Thay thế các ô màu trên bằng <code className="rounded bg-accent-light/40 px-1">&lt;img&gt;</code> hoặc{" "}
-          <code className="rounded bg-accent-light/40 px-1">next/image</code> với ảnh từ thư mục{" "}
-          <code className="rounded bg-accent-light/40 px-1">public/images/</code>
-        </p>
-      </div>
+      {/* Level 3: Photos in event */}
+      {openEvent && currentEvent && (
+        <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/40 p-3 pt-6 backdrop-blur-sm sm:p-4 sm:pt-10" onClick={closeAll}>
+          <div
+            className="w-full max-w-5xl rounded-2xl border-2 border-accent/30 bg-[var(--bg-primary)] p-4 shadow-2xl animate-bounce-in sm:rounded-3xl sm:p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between sm:mb-6">
+              <div>
+                <button onClick={() => setOpenEvent(null)} className="mb-1 text-xs font-semibold text-accent transition hover:text-accent-dark sm:mb-2 sm:text-sm">
+                  ← Quay lại {openGroup}
+                </button>
+                <h2 className="text-lg font-bold text-accent-dark sm:text-xl md:text-2xl" style={{ textShadow: "0 2px 4px rgba(139,94,60,0.1)" }}>
+                  🖼️ {openEvent}
+                </h2>
+              </div>
+              <button onClick={closeAll} className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/10 text-lg font-bold text-accent-dark transition hover:bg-accent/20 sm:h-10 sm:w-10 sm:text-xl">
+                ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-3 md:grid-cols-3 lg:grid-cols-4">
+              {currentEvent.photos.map((photo, i) => (
+                <div
+                  key={photo.id}
+                  className={`${photo.color} gallery-card card-bubble flex aspect-square items-center justify-center rounded-xl p-3 text-center sm:rounded-2xl sm:p-5`}
+                  style={{ animationDelay: `${i * 0.05}s` }}
+                >
+                  <span className="text-3xl opacity-50 sm:text-4xl md:text-5xl">🖼️</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

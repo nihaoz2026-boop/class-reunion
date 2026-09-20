@@ -1,0 +1,104 @@
+import { NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
+
+function getRedis() {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) {
+    throw new Error(`Missing Redis env: URL=${!!url}, TOKEN=${!!token}`);
+  }
+  return new Redis({ url, token });
+}
+
+const KEY = "a8-revolt-accounts";
+
+export async function GET() {
+  try {
+    const redis = getRedis();
+    const accounts = (await redis.get(KEY)) || [];
+    return NextResponse.json(accounts);
+  } catch (e) {
+    console.error("GET error:", e);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const redis = getRedis();
+    const body = await request.json();
+    const { username, email, password, note } = body;
+
+    if (!username) {
+      return NextResponse.json({ error: "Missing username" }, { status: 400 });
+    }
+
+    const account = {
+      id: Date.now(),
+      username: String(username).trim(),
+      email: String(email || "").trim(),
+      password: String(password || "").trim(),
+      note: String(note || "").trim(),
+      created: new Date().toISOString().split("T")[0],
+    };
+
+    const existing: unknown[] = (await redis.get(KEY)) || [];
+    await redis.set(KEY, [...existing, account]);
+
+    return NextResponse.json(account);
+  } catch (e) {
+    console.error("POST error:", e);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
+}
+
+export async function PUT(request: Request) {
+  try {
+    const redis = getRedis();
+    const body = await request.json();
+    const { id, username, email, password, note } = body;
+
+    if (!id) {
+      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    }
+
+    const existing: any[] = (await redis.get(KEY)) || [];
+    const updated = existing.map((a: any) =>
+      a.id === id
+        ? {
+            ...a,
+            username: username ?? a.username,
+            email: email ?? a.email,
+            password: password ?? a.password,
+            note: note ?? a.note,
+          }
+        : a
+    );
+    await redis.set(KEY, updated);
+
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    console.error("PUT error:", e);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const redis = getRedis();
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get("id");
+
+    if (!id) {
+      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    }
+
+    const existing: any[] = (await redis.get(KEY)) || [];
+    await redis.set(KEY, existing.filter((a: any) => String(a.id) !== String(id)));
+
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    console.error("DELETE error:", e);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
+}
