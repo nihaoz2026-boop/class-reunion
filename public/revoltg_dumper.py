@@ -823,6 +823,52 @@ def _revoltg_ram_texts():
             kernel32.CloseHandle(handle)
 
 
+REVOLTG_WEB = 'http://app.revolt.vn'
+
+
+def _parse_catalogue_texts(texts, into):
+    """Add every {id, name, steam_id} game found in texts to the dict `into`.
+
+    Only entries that carry a real Steam id are accepted. The same responses
+    also contain Steam genres ("Hành động", "Đua tốc độ"), news posts and video
+    items ("Launch Trailer", "....mp4"), which are all shaped like
+    {"id":..,"name":..} and so slipped in before this was checked. Naming an
+    account "Launch Trailer" or "Hành động" is worse than naming it nothing.
+
+    Field order varies between the arrays ("hot_games" carries a "time" field),
+    so the object body is located by its braces and each key is pulled out on
+    its own. Fixing the field order instead lost the name and steam_id of 28 of
+    78 games.
+    """
+    import html
+
+    obj_re = re.compile(r'\{[^{}]{0,900}?"id"\s*:\s*(\d+)[^{}]{0,900}?\}', re.S)
+    name_re = re.compile(r'"name"\s*:\s*"((?:[^"\\]|\\.)*)"')
+    steam_re = re.compile(r'"steam_id"\s*:\s*(\d+)')
+
+    for text in texts:
+        # HTTP responses arrive HTML-escaped, so &quot; has to go first.
+        plain = html.unescape(text)
+        if '"id"' not in plain:
+            continue
+        for m in obj_re.finditer(plain):
+            body = m.group(0)
+            steam_m = steam_re.search(body)
+            if not steam_m:
+                continue
+            name_m = name_re.search(body)
+            if not name_m:
+                continue
+            try:
+                gname = json.loads('"' + name_m.group(1) + '"')
+            except ValueError:
+                gname = name_m.group(1)
+            gname = ' '.join(gname.split())   # drops the stray leading \r\n
+            if gname:
+                into.setdefault(m.group(1), (gname, steam_m.group(1)))
+    return into
+
+
 def load_revoltg_catalogue():
     """Return {revolt_appid: (name, steam_id)} from RevoltG itself.
 
@@ -864,43 +910,11 @@ def load_revoltg_catalogue():
     # body is located by its braces and each key is then pulled out on its own.
     # Fixing the field order instead lost the name and steam_id of 28 of 78
     # games.
-    obj_re = re.compile(r'\{[^{}]{0,900}?"id"\s*:\s*(\d+)[^{}]{0,900}?\}', re.S)
-    name_re = re.compile(r'"name"\s*:\s*"((?:[^"\\]|\\.)*)"')
-    steam_re = re.compile(r'"steam_id"\s*:\s*(\d+)')
-
-    # Only entries that carry a real Steam id are games. The same responses also
-    # contain Steam genres ("Hành động", "Đua tốc độ"), news posts and video
-    # items ("Launch Trailer", "....mp4"), which are all shaped like
-    # {"id":..,"name":..} and so slipped in before this was checked. Naming an
-    # account "Launch Trailer" or "Hành động" is worse than naming it nothing.
-    def parse(texts, into):
-        for text in texts:
-            # HTTP responses arrive HTML-escaped, so &quot; has to go first.
-            plain = html.unescape(text)
-            if '"id"' not in plain:
-                continue
-            for m in obj_re.finditer(plain):
-                body = m.group(0)
-                steam_m = steam_re.search(body)
-                if not steam_m:
-                    continue
-                name_m = name_re.search(body)
-                if not name_m:
-                    continue
-                try:
-                    gname = json.loads('"' + name_m.group(1) + '"')
-                except ValueError:
-                    gname = name_m.group(1)
-                gname = ' '.join(gname.split())   # drops the stray leading \r\n
-                if gname:
-                    into.setdefault(m.group(1), (gname, steam_m.group(1)))
-        return into
-
-    # The disk mirror and the two live sources are merged, not overwritten. It
-    # used to be reset right before the parse, which threw the mirror away
-    # every run, so clearing RevoltG's cache made every name unresolvable.
-    parse(_revoltg_cache_texts(), games)
-    parse(_revoltg_ram_texts(), games)
+    # The disk mirror and the live sources are merged, not overwritten. It used
+    # to be reset right before the parse, which threw the mirror away every run,
+    # so clearing RevoltG's cache made every name unresolvable.
+    _parse_catalogue_texts(_revoltg_cache_texts(), games)
+    _parse_catalogue_texts(_revoltg_ram_texts(), games)
 
     if games:
         try:
@@ -912,6 +926,88 @@ def load_revoltg_catalogue():
 
     _REVOLTG_CATALOGUE = games
     return games
+
+
+def revoltg_online_fill(wanted_ids=(), max_pages=4):
+    """Fetch catalogue pages from RevoltG's own site and add them.
+
+    The catalogue is paginated, so RevoltG's cache and memory only ever hold the
+    pages it happened to open, which leaves most ids unnamed. The list endpoint
+    is http://app.revolt.vn/game?page=N, recovered from Chromium's cache index,
+    and it answers with the same {id, name, steam_id} objects, so the results go
+    through the identical parser rather than a new one with its own mistakes.
+
+    Filling is incremental and capped: a few pages per run, resuming from where
+    the last run stopped, so the site is not hammered. Progress is remembered on
+    disk, and nothing is fetched once every wanted id is already known.
+
+    Returns (new_count, status). status is 'ok', 'done', 'offline' or 'unknown',
+    so the caller can say plainly why nothing came back instead of leaving the
+    user guessing.
+    """
+    wanted = {str(i) for i in wanted_ids if i not in (None, '', 'N/A', '0')}
+    here = os.path.dirname(os.path.abspath(__file__))
+    progress_file = os.path.join(here, 'revoltg_pages.json')
+    try:
+        with open(progress_file, 'r', encoding='utf-8') as f:
+            next_page = int(json.load(f).get('next_page', 0))
+    except (OSError, ValueError, TypeError):
+        next_page = 0
+
+    if wanted and wanted.issubset(set(load_revoltg_catalogue())):
+        return 0, 'done'
+
+    known = set(load_revoltg_catalogue())
+    found = {}
+    offline = False
+    fetched = 0
+    for _ in range(max_pages):
+        url = f'{REVOLTG_WEB}/game?page={next_page}'
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': 'application/json, text/html, */*',
+                'Referer': f'{REVOLTG_WEB}/',
+            })
+            body = urllib.request.urlopen(req, timeout=12).read().decode('utf-8',
+                                                                        'replace')
+        except urllib.error.HTTPError as e:
+            # 520 means the origin is down; 5xx likewise. Both are "come back
+            # later", not "this will never work", so the page is not consumed.
+            if e.code >= 500:
+                offline = True
+            break
+        except Exception:
+            offline = True
+            break
+        fetched += 1
+        before = len(found)
+        _parse_catalogue_texts([body], found)
+        if len(found) == before:
+            break        # page held no new game: the catalogue ends here
+        next_page += 1
+
+    if not fetched:
+        return 0, 'offline' if offline else 'unknown'
+
+    merged = dict(load_revoltg_catalogue())
+    new_ids = [k for k in found if k not in merged]
+    merged.update(found)
+    global _REVOLTG_CATALOGUE
+    _REVOLTG_CATALOGUE = merged
+    try:
+        with open(os.path.join(here, 'revoltg_games.json'), 'w',
+                  encoding='utf-8') as f:
+            json.dump({k: list(v) for k, v in merged.items()}, f,
+                      ensure_ascii=False, indent=1)
+        with open(progress_file, 'w', encoding='utf-8') as f:
+            json.dump({'next_page': next_page, 'known': len(merged)}, f)
+    except OSError:
+        pass
+    status = 'ok'
+    if wanted and wanted.issubset(set(merged)):
+        status = 'done'
+    return len(new_ids), status
 
 
 def revoltg_catalogue_name(game_id):
@@ -2329,6 +2425,25 @@ def main():
                 if u in newly:
                     print(f"{C.DIM}    {u} -> {nm} (appid {gid}){C.RESET}")
             print(f"{C.DIM}    Luu vao account_games.json, chi dung cho chinh tai khoan nay.{C.RESET}")
+
+    if unnamed_appids:
+        # RevoltG's own list is paginated, so an id it never opened is unknown
+        # locally. Ask the site directly before giving up on it, and say plainly
+        # when the site is the reason rather than leaving "App <id>" unexplained.
+        still = {str(i) for i in unnamed_appids}
+        n_new, status = revoltg_online_fill(still)
+        if n_new:
+            print(f"\n{C.GREEN}[+] Da tai {n_new} game tu danh muc RevoltG"
+                  f"{C.RESET}")
+            for k in sorted(still, key=lambda x: int(x) if x.isdigit() else 0):
+                entry = load_revoltg_catalogue().get(k)
+                if entry:
+                    print(f"{C.DIM}    {k} -> {entry[0]}{C.RESET}")
+        elif status == 'offline':
+            print(f"\n{C.YELLOW}[!] {REVOLTG_WEB} khong phan hoi, khong tai them"
+                  f" danh muc duoc{C.RESET}")
+            print(f"{C.DIM}    Cac AppID con lai se co ten o lan chay sau,"
+                  f" khi trang do hoat dong lai.{C.RESET}")
 
     if unnamed_appids:
         added = remember_unresolved_appids(unnamed_appids)
