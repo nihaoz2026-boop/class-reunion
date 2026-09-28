@@ -426,7 +426,7 @@ def upload_db_accounts_to_web(conn, steam_path=None):
         # Re-resolve the name: a game_map.txt entry or a Steam API answer may
         # have turned up since the row was first written. An unnamed AppID keeps
         # its "App <id>" label so the id is not lost from the web note.
-        resolved, _src = resolve_game_name(game_id, steam_path, game_name)
+        resolved, _src = resolve_game_name(game_id, steam_path, game_name, username)
         label = resolved or (game_name if game_name and
                              str(game_name) != 'N/A' else None)
         if not label and game_id and str(game_id) not in ('N/A', '0', 'None', ''):
@@ -948,7 +948,67 @@ def remember_learned_names(learned):
         return []
 
 
-def resolve_game_name(game_id, steam_path=None, payload_name=None):
+ACCOUNT_GAME_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'account_games.json')
+
+# username -> {"game": <name>, "appid": <id as seen when confirmed>}
+_ACCOUNT_GAMES = None
+
+
+def load_account_game_names():
+    """{username: game name} for names the user confirmed per account.
+
+    Kept separate from game_map.txt on purpose. The appid RevoltG reports is
+    not known to be a stable per-game key, so an appid-wide table risks naming a
+    different account with the wrong game. A wrong game name is worse than no
+    name, so a confirmed name is only ever reused for the account it was
+    confirmed on.
+    """
+    global _ACCOUNT_GAMES
+    if _ACCOUNT_GAMES is None:
+        out = {}
+        try:
+            with open(ACCOUNT_GAME_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            for user, entry in data.items():
+                if isinstance(entry, dict) and entry.get('game'):
+                    out[str(user)] = str(entry['game'])
+                elif isinstance(entry, str) and entry:
+                    out[str(user)] = entry
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        _ACCOUNT_GAMES = out
+    return _ACCOUNT_GAMES
+
+
+def remember_account_game(username, game_name, appid=None):
+    """Pin a confirmed game name to one account. Returns True if it changed."""
+    if not username or not game_name:
+        return False
+    table = {}
+    try:
+        with open(ACCOUNT_GAME_FILE, 'r', encoding='utf-8') as f:
+            table = json.load(f)
+    except (OSError, ValueError, TypeError):
+        table = {}
+    entry = {'game': game_name}
+    if appid and str(appid) not in ('N/A', '0', 'None', ''):
+        entry['appid'] = str(appid)
+    if table.get(str(username)) == entry:
+        return False
+    table[str(username)] = entry
+    try:
+        with open(ACCOUNT_GAME_FILE, 'w', encoding='utf-8') as f:
+            json.dump(table, f, ensure_ascii=False, indent=1)
+    except OSError as e:
+        print(f"{C.DIM}    (khong ghi duoc account_games.json: {e}){C.RESET}")
+        return False
+    global _ACCOUNT_GAMES
+    _ACCOUNT_GAMES = None
+    return True
+
+
+def resolve_game_name(game_id, steam_path=None, payload_name=None, username=None):
     """Best available name for an AppID, plus how it was determined.
 
     Returns (name, source). Sources, most to least trustworthy:
@@ -966,7 +1026,16 @@ def resolve_game_name(game_id, steam_path=None, payload_name=None):
 
     game_id = str(game_id)
 
-    # 1. User-supplied name wins over everything.
+    # 1. Name already confirmed for this specific account. A per-account memory
+    #    is checked first because the appid cannot be assumed to be a stable
+    #    identifier: RevoltG may hand out a different number per account, in
+    #    which case an appid-wide table would name the next account wrongly.
+    if username:
+        pinned = load_account_game_names().get(str(username))
+        if pinned:
+            return pinned, 'account'
+
+    # 2. User-supplied name wins over everything else.
     name = load_game_map().get(game_id)
     if name:
         return name, 'map'
@@ -1950,7 +2019,7 @@ def main():
                 game_name_ext = REVOLT_NAME_CACHE[game_id]
 
         game_name, name_source = resolve_game_name(
-            game_id, steam_path, game_name_ext)
+            game_id, steam_path, game_name_ext, username)
 
         if not game_name:
             game_name = f"App {game_id}"
@@ -1997,6 +2066,7 @@ def main():
             'cache':   'bang ten da tra',
             'revolt':  'RevoltG',
             'catalog': 'danh muc RevoltG',
+            'account': 'tai khoan da xac nhan',
             'local':   'Steam may cai',
             'api':     'Steam store',
         }.get(name_source, 'CHUA BIET TEN')
@@ -2057,6 +2127,22 @@ def main():
 
     # AppID RevoltG cap ma Steam khong biet -> ghi ra game_map.txt de user
     # dien ten mot lan, cac lan sau tool se tu tra ra ten.
+    # Ghi nho ten da tra duoc cho tung tai khoan. AppID cua RevoltG co the doi
+    # theo tung acc, nen ten chi dung lai cho chinh acc do - khong dua sang
+    # acc khac.
+    pinned = [(k, v.get('game_name'), v.get('game_id'))
+              for k, v in accounts.items()
+              if v.get('game_name') and not str(v.get('game_name')).startswith('App ')]
+    if pinned:
+        newly = [u for u, nm, gid in pinned
+                 if remember_account_game(u, nm, gid)]
+        if newly:
+            print(f"\n{C.GREEN}[+] Da ghi nho ten game cho {len(newly)} tai khoan:{C.RESET}")
+            for u, nm, gid in pinned:
+                if u in newly:
+                    print(f"{C.DIM}    {u} -> {nm} (appid {gid}){C.RESET}")
+            print(f"{C.DIM}    Luu vao account_games.json, chi dung cho chinh tai khoan nay.{C.RESET}")
+
     if unnamed_appids:
         added = remember_unresolved_appids(unnamed_appids)
         if added:
