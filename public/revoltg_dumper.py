@@ -359,6 +359,28 @@ def is_account_dumped(conn, username):
     c.execute("SELECT 1 FROM accounts WHERE username = ?", (username,))
     return c.fetchone() is not None
 
+def db_accounts_missing_game_name(conn):
+    """Accounts already stored locally whose game name is still unresolved.
+
+    A stored name that merely echoes the AppID (or the N/A placeholder used
+    when RevoltG sent no AppID at all) is not a real name, so it counts as
+    still waiting.
+    """
+    try:
+        c = conn.cursor()
+        c.execute("SELECT username, game_id, game_name FROM accounts")
+        rows = c.fetchall()
+    except sqlite3.OperationalError:
+        return []
+    waiting = []
+    for username, game_id, game_name in rows:
+        label = (game_name or '').strip()
+        known = label and not re.match(r'^(app\s*\d+|n/?a|unknown)', label, re.I)
+        if not known:
+            waiting.append((username, f"App {game_id}" if game_id else 'N/A'))
+    return waiting
+
+
 def upload_db_accounts_to_web(conn, steam_path=None):
     """Re-send every account in the local DB to the web.
 
@@ -1583,12 +1605,19 @@ def main():
     new_accounts = {}
 
     # Filter out accounts that don't have a plaintext password or are already dumped
+    already_dumped = 0
+    no_password = 0
     for k, v in accounts.items():
         if v.get('password'):
             if not is_account_dumped(db_conn, k):
                 new_accounts[k] = v
+            else:
+                already_dumped += 1
+        else:
+            no_password += 1
 
     accounts = new_accounts
+    scan_seen = len(accounts) + already_dumped + no_password
 
     # ---- Battle.net email-cred dedup & filter ----
     bnet_accounts = {}
@@ -1649,7 +1678,19 @@ def main():
         # game nhap trong game_map.txt duoc day lai len vietrealm.asia. Thoat
         # som se khiien "dien ten roi chay lai" khong bao gio co tac dung.
         print(f"\n{C.YELLOW}[!] Khong co tai khoan MOI trong RAM.")
-        print(f"{C.DIM}    Hay mo RevoltG va dang nhap Steam/Battle.net truoc khi chay lai.{C.RESET}")
+        if scan_seen:
+            print(f"{C.DIM}    RAM thay {scan_seen} tai khoan, khong co tai khoan"
+                  f" nao moi:{C.RESET}")
+            if already_dumped:
+                print(f"{C.DIM}      - {already_dumped} da nam trong revoltg_accounts.db"
+                      f" nen bi bo qua{C.RESET}")
+            if no_password:
+                print(f"{C.DIM}      - {no_password} chi co ban ma hoa, thieu mat khau"
+                      f" plaintext{C.RESET}")
+            print(f"{C.DIM}    Muon lay tai khoan MOI: dang nhap RevoltG bang tai khoan"
+                  f" Steam khac.{C.RESET}")
+        else:
+            print(f"{C.DIM}    Hay mo RevoltG va dang nhap Steam/Battle.net truoc khi chay lai.{C.RESET}")
         print(f"{C.DIM}    Van tiep tuc dong bo ten game len web.{C.RESET}")
 
     output_file      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'revoltg_accounts.txt')
@@ -1687,6 +1728,9 @@ def main():
                 print(f"{C.GREEN}[+] Ten game: {running_name}{C.RESET}")
     else:
         print(f"{C.DIM}[*] Khong co game Steam nao dang chay (RunningAppID = 0).{C.RESET}")
+        print(f"{C.DIM}    Muon tool do ten game: mo game trong RevoltG roi CHAY LAI"
+              f" ngay khi game bat len.{C.RESET}")
+        print(f"{C.DIM}    Steam phai co game thuc su chay, khong phai chi mo client Steam.{C.RESET}")
 
     unnamed_appids = set()
     learned = {}
@@ -1843,7 +1887,22 @@ def main():
                   f"(RevoltG cap AppID rieng):{C.RESET}")
             for app_id in added:
                 print(f"{C.DIM}    {app_id}{C.RESET}")
-            print(f"{C.DIM}    Mo {GAME_MAP_FILE}, them ten ben phai '=' roi chay lai.{C.RESET}")
+            if not (running_appid and running_appid != '0'):
+                print(f"{C.DIM}    Cach nhanh nhat: mo game trong RevoltG roi chay lai"
+                      f" - tool se tu ghi ten game.{C.RESET}")
+            else:
+                print(f"{C.DIM}    Mo {GAME_MAP_FILE}, them ten ben phai '=' roi chay lai.{C.RESET}")
+
+    # Nhắc những tài khoản đã lưu nhưng tên game vẫn chưa biết, để người
+    # dùng thấy ngay việc còn tồn đọng thay vì phải tự mở DB ra kiểm.
+    if no_new_accounts and not (running_appid and running_appid != '0'):
+        waiting = db_accounts_missing_game_name(db_conn)
+        if waiting:
+            print(f"\n{C.YELLOW}[!] {len(waiting)} tai khoan da luu nhung chua co ten game:{C.RESET}")
+            for username, game_label in waiting[:10]:
+                print(f"{C.DIM}    {username} -> {game_label}{C.RESET}")
+            if len(waiting) > 10:
+                print(f"{C.DIM}    ... va {len(waiting) - 10} tai khoan khac{C.RESET}")
 
     # Ghi ten da tu hoc tu game Steam dang chay. Lan sau khong can mo game lai.
     if learned:
