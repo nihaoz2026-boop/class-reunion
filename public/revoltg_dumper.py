@@ -732,25 +732,31 @@ def load_revoltg_catalogue():
     try:
         with open(cache_file, 'r', encoding='utf-8') as f:
             for rid, pair in json.load(f).items():
-                games[str(rid)] = (str(pair[0]),
-                                   str(pair[1]) if len(pair) > 1 else '')
+                steam = str(pair[1]) if len(pair) > 1 else ''
+                # Older cache files were written before the steam_id filter
+                # existed and hold genres and trailers; re-checking here keeps
+                # them from coming back.
+                if not steam:
+                    continue
+                games[str(rid)] = (str(pair[0]), steam)
     except (OSError, ValueError, TypeError, IndexError, KeyError):
         pass
 
-    # Each game object looks like
+    # A game object looks like
     #   {"id":1885,"type":1,"name":"Forza ...","steam_id":1551360,"steam_id_dlc":"..."}
-    # but "hot_games" inserts a "time" field, and field order is not guaranteed,
-    # so anything may appear between "name" and "steam_id". Matching the whole
-    # object body loosely is what keeps all 78 entries instead of 50.
-    # A game object is a flat {...} of string/number values. Anchoring on the
-    # braces and then walking the pairs is far more dependable than guessing a
-    # field order: "hot_games" inserts a "time" field, and a fixed order lost
-    # both the name and the steam_id of 28 of 78 games.
+    # but field order varies ("hot_games" inserts a "time" field), so the object
+    # body is located by its braces and each key is then pulled out on its own.
+    # Fixing the field order instead lost the name and steam_id of 28 of 78
+    # games.
     obj_re = re.compile(r'\{[^{}]{0,900}?"id"\s*:\s*(\d+)[^{}]{0,900}?\}', re.S)
-    id_re = re.compile(r'"id"\s*:\s*(\d+)')
     name_re = re.compile(r'"name"\s*:\s*"((?:[^"\\]|\\.)*)"')
     steam_re = re.compile(r'"steam_id"\s*:\s*(\d+)')
 
+    # Only entries that carry a real Steam id are games. The same responses also
+    # contain Steam genres ("Hành động", "Đua tốc độ"), news posts and video
+    # items ("Launch Trailer", "....mp4"), which are all shaped like
+    # {"id":..,"name":..} and so slipped in before this was checked. Naming an
+    # account "Launch Trailer" or "Hành động" is worse than naming it nothing.
     games = {}
     for text in _revoltg_cache_texts():
         # RevoltG's responses arrive HTML-escaped, so &quot; has to go first.
@@ -759,6 +765,9 @@ def load_revoltg_catalogue():
             continue
         for m in obj_re.finditer(plain):
             body = m.group(0)
+            steam_m = steam_re.search(body)
+            if not steam_m:
+                continue
             name_m = name_re.search(body)
             if not name_m:
                 continue
@@ -767,11 +776,8 @@ def load_revoltg_catalogue():
             except ValueError:
                 gname = name_m.group(1)
             gname = ' '.join(gname.split())   # drops the stray leading \r\n
-            if not gname:
-                continue
-            steam_m = steam_re.search(body)
-            games.setdefault(m.group(1),
-                             (gname, steam_m.group(1) if steam_m else ''))
+            if gname:
+                games.setdefault(m.group(1), (gname, steam_m.group(1)))
 
     if games:
         try:
