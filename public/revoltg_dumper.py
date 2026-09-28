@@ -83,15 +83,28 @@ SAM_SHOP_UPLOAD = os.environ.get('SAM_SHOP_UPLOAD', '1') not in ('0', 'false', '
 VIETREALM_URL = os.environ.get('VIETREALM_URL', 'https://vietrealm.asia').rstrip('/')
 VIETREALM_UPLOAD = os.environ.get('VIETREALM_UPLOAD', '1') not in ('0', 'false', 'False', '')
 
-# Admin key = gia tri ADMIN_PASSWORD tren Vercel. Bat buoc cho upload.
-# Dat bien moi truoc khi chay:  $env:VIETREALM_ADMIN_KEY = "mat-khau-cua-ban"
-VIETREALM_ADMIN_KEY = os.environ.get('VIETREALM_ADMIN_KEY', '')
+# Admin key = gia tri ADMIN_PASSWORD tren Vercel. Bat buoc cho upload web.
+# Doc theo thu tu tu: bien moi truong -> file "vietrealm.key" canh script -> mac dinh.
+# File canh script de dua vao .gitignore, nen key khong lo len repo public.
+_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vietrealm.key')
+
+def _load_admin_key():
+    k = os.environ.get('VIETREALM_ADMIN_KEY', '').strip()
+    if k:
+        return k
+    try:
+        with open(_KEY_FILE, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+VIETREALM_ADMIN_KEY = _load_admin_key()
 
 def _vr_headers():
     if not VIETREALM_ADMIN_KEY:
-        print(f"{C.RED}[!] Chua dat VIETREALM_ADMIN_KEY -> se bi tu choi 401.{C.RESET}")
-        print(f"{C.DIM}    Dat bien moi truoc khi chay:{C.RESET}")
-        print(f"{C.DIM}      $env:VIETREALM_ADMIN_KEY = \"<ADMIN_PASSWORD tren Vercel>\"{C.RESET}")
+        print(f"{C.RED}[!] Thieu admin key -> web se tra 401.{C.RESET}")
+        print(f"{C.DIM}    Tao file canh script nay, noi dung la mat khau admin:{C.RESET}")
+        print(f"{C.DIM}      {C.YELLOW}vietrealm.key{C.RESET}")
     return {'Content-Type': 'application/json', 'X-Admin-Key': VIETREALM_ADMIN_KEY}
 
 # ============================================
