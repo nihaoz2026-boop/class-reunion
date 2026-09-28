@@ -954,10 +954,12 @@ def revoltg_online_fill(wanted_ids=(), max_pages=4):
     except (OSError, ValueError, TypeError):
         next_page = 0
 
-    if wanted and wanted.issubset(set(load_revoltg_catalogue())):
+    # One load, not one per use: every call re-reads RevoltG's cache and walks
+    # its memory, which is the slowest part of a run.
+    current = load_revoltg_catalogue()
+    if wanted and wanted.issubset(set(current)):
         return 0, 'done'
 
-    known = set(load_revoltg_catalogue())
     found = {}
     offline = False
     fetched = 0
@@ -990,7 +992,7 @@ def revoltg_online_fill(wanted_ids=(), max_pages=4):
     if not fetched:
         return 0, 'offline' if offline else 'unknown'
 
-    merged = dict(load_revoltg_catalogue())
+    merged = dict(current)
     new_ids = [k for k in found if k not in merged]
     merged.update(found)
     global _REVOLTG_CATALOGUE
