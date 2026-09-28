@@ -83,6 +83,17 @@ SAM_SHOP_UPLOAD = os.environ.get('SAM_SHOP_UPLOAD', '1') not in ('0', 'false', '
 VIETREALM_URL = os.environ.get('VIETREALM_URL', 'https://vietrealm.asia').rstrip('/')
 VIETREALM_UPLOAD = os.environ.get('VIETREALM_UPLOAD', '1') not in ('0', 'false', 'False', '')
 
+# Admin key = gia tri ADMIN_PASSWORD tren Vercel. Bat buoc cho upload.
+# Dat bien moi truoc khi chay:  $env:VIETREALM_ADMIN_KEY = "mat-khau-cua-ban"
+VIETREALM_ADMIN_KEY = os.environ.get('VIETREALM_ADMIN_KEY', '')
+
+def _vr_headers():
+    if not VIETREALM_ADMIN_KEY:
+        print(f"{C.RED}[!] Chua dat VIETREALM_ADMIN_KEY -> se bi tu choi 401.{C.RESET}")
+        print(f"{C.DIM}    Dat bien moi truoc khi chay:{C.RESET}")
+        print(f"{C.DIM}      $env:VIETREALM_ADMIN_KEY = \"<ADMIN_PASSWORD tren Vercel>\"{C.RESET}")
+    return {'Content-Type': 'application/json', 'X-Admin-Key': VIETREALM_ADMIN_KEY}
+
 # ============================================
 # Windows API
 # ============================================
@@ -227,7 +238,7 @@ def vietrealm_upload_account(username, password, email='', note=''):
         f"{VIETREALM_URL}/api/revolt",
         data=json.dumps(payload).encode('utf-8'),
         method='POST',
-        headers={'Content-Type': 'application/json'},
+        headers=_vr_headers(),
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -247,7 +258,7 @@ def vietrealm_existing_usernames():
     if not VIETREALM_UPLOAD:
         return set()
     try:
-        req = urllib.request.Request(f"{VIETREALM_URL}/api/revolt", method='GET')
+        req = urllib.request.Request(f"{VIETREALM_URL}/api/revolt", method='GET', headers=_vr_headers())
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode('utf-8', errors='replace'))
         out = set()

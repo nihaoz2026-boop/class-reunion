@@ -2,8 +2,6 @@
 
 import { useState, useEffect } from "react";
 
-const PASSWORD = "18022012";
-
 type Alumni = { id: number; name: string };
 type Msg = { id: number; author: string; text: string; date: string; initials: string; color: string };
 type TimelineItem = { year: string; event: string };
@@ -127,9 +125,29 @@ export default function AdminPage() {
   const copyPassword = (pw: string) => copyText(pw, "Đã copy mật khẩu!");
   const copyUsername = (u: string) => copyText(u, "Đã copy tên tài khoản!");
 
-  const handleLogin = () => {
-    if (pw === PASSWORD) { setAuthed(true); setError(""); }
-    else setError("Sai mật khẩu!");
+  const handleLogin = async () => {
+    if (!pw) return;
+    setError("");
+    try {
+      const res = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pw }),
+      });
+      if (res.ok) {
+        setPw("");
+        setAuthed(true);
+      } else {
+        setError("Sai mật khẩu!");
+      }
+    } catch {
+      setError("Lỗi mạng, thử lại!");
+    }
+  };
+
+  const handleLogout = async () => {
+    await fetch("/api/admin/login", { method: "DELETE" });
+    setAuthed(false);
   };
 
   const handleSaveAlumni = async () => {
@@ -249,7 +267,7 @@ export default function AdminPage() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3 sm:mb-8">
         <h1 className="text-2xl font-bold text-accent-dark sm:text-3xl" style={{ textShadow: "0 2px 4px rgba(139,94,60,0.1)" }}>⚙️ Quản trị website</h1>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setAuthed(false)} className="btn-bubble btn-bubble-outline text-xs sm:text-sm">🚪 Đăng xuất</button>
+          <button onClick={handleLogout} className="btn-bubble btn-bubble-outline text-xs sm:text-sm">🚪 Đăng xuất</button>
         </div>
       </div>
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
+import { requireAdmin } from "@/lib/adminAuth";
 
 function getRedis() {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -8,7 +9,9 @@ function getRedis() {
   return new Redis({ url, token });
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
   try {
     const redis = getRedis();
     const groups = ["6A8", "7A8", "8A8", "9A8", "Hoạt động", "Tốt nghiệp"];

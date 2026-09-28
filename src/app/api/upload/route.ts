@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
+import { requireAdmin } from "@/lib/adminAuth";
 
 function getRedis() {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -9,6 +10,8 @@ function getRedis() {
 }
 
 export async function POST(request: Request) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
   try {
     const redis = getRedis();
     const formData = await request.formData();
