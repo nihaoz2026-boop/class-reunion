@@ -51,6 +51,8 @@ __pycache__
 
 # khoa admin VietRealm
 vietrealm.key
+# khoa shop SAM
+sam_shop.key
 game_map.txt
 # danh muc game RevoltG doc duoc tu cache cua app, sinh ra luc chay
 revoltg_games.json

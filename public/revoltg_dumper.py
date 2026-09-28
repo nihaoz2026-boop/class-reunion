@@ -73,7 +73,25 @@ BNET_PRODUCT_CACHE = {
 # Env: SAM_SHOP_URL, SAM_SHOP_KEY, SAM_SHOP_PRICE, SAM_SHOP_UPLOAD=0 to disable
 
 SAM_SHOP_URL = os.environ.get('SAM_SHOP_URL', 'http://26.109.24.117:3847').rstrip('/')
-SAM_SHOP_KEY = os.environ.get('SAM_SHOP_KEY', 'sam_d1fa394e09141f1eae75e64f6202dba5ff27e3711f39fb11')  # Shop API page -> Rotate key
+
+# Key doc theo thu tu tu: bien moi truong -> file "sam_shop.key" canh script.
+# Khoa shop khong ghi mac dinh trong file nay. Ban nay duoc phat hanh cong khai
+# tren vietrealm.asia, nen mot mac dinh co nghia la bat ky ai tai ve deu co
+# the goi vao shop. File canh script da co trong .gitignore.
+_SHOP_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              'sam_shop.key')
+
+def _load_shop_key():
+    k = os.environ.get('SAM_SHOP_KEY', '').strip()
+    if k:
+        return k
+    try:
+        with open(_SHOP_KEY_FILE, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+SAM_SHOP_KEY = _load_shop_key()
 SAM_SHOP_PRICE = float(os.environ.get('SAM_SHOP_PRICE', '0') or 0)
 SAM_SHOP_UPLOAD = os.environ.get('SAM_SHOP_UPLOAD', '1') not in ('0', 'false', 'False', '')
 
@@ -165,7 +183,8 @@ def sam_shop_upload_steam(accounts, price=None):
         print(f"{C.DIM}[*] SAM upload disabled (SAM_SHOP_UPLOAD=0){C.RESET}")
         return None
     if not SAM_SHOP_KEY:
-        print(f"{C.YELLOW}[!] SAM_SHOP_KEY empty — set env or edit SAM_SHOP_KEY in script{C.RESET}")
+        print(f"{C.YELLOW}[!] SAM_SHOP_KEY rong - tao file 'sam_shop.key' canh"
+              f" script roi chay lai{C.RESET}")
         return None
 
     rows = []
