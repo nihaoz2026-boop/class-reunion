@@ -378,6 +378,24 @@ def is_account_dumped(conn, username):
     c.execute("SELECT 1 FROM accounts WHERE username = ?", (username,))
     return c.fetchone() is not None
 
+def is_real_game_name(value):
+    """True when this is an actual game name rather than a stand-in.
+
+    This tool writes "App <id>" when it cannot name a game, and RevoltG's own
+    payload uses "N/A" for the same gap. Neither may reach the web note as if
+    it were a name, so one test is shared by every caller. It used to be spelled
+    out separately in four places, and each one missed a marker the others
+    caught, which is how "game:N/A" reached the site.
+
+    A name that merely begins with one of these words is still accepted:
+    "Unknown Danger" and "App Battle" are real games.
+    """
+    if not value:
+        return False
+    return not re.match(r'^\s*(?:app\s*\d+|n[\s/]?a|unknown|none|null)\s*$',
+                        str(value), re.I)
+
+
 def db_accounts_missing_game_name(conn):
     """Accounts already stored locally whose game name is still unresolved.
 
@@ -394,8 +412,7 @@ def db_accounts_missing_game_name(conn):
     waiting = []
     for username, game_id, game_name in rows:
         label = (game_name or '').strip()
-        known = label and not re.match(r'^(app\s*\d+|n/?a|unknown)', label, re.I)
-        if not known:
+        if not is_real_game_name(label):
             waiting.append((username, f"App {game_id}" if game_id else 'N/A'))
     return waiting
 
@@ -418,7 +435,10 @@ def upload_db_accounts_to_web(conn, steam_path=None):
         return 0
 
     sent = 0
-    for username, password, game_id, game_name, steam_id, steam_appid in rows:
+    # steam_id is selected but no longer sent: the note used to carry the
+    # SteamID64 as "id:7656...", which crowded out the one thing worth reading.
+    # It stays in the DB, so nothing is lost, only hidden.
+    for username, password, game_id, game_name, _steam_id, steam_appid in rows:
         if not username or not password:
             continue
         # Khong bo qua tai khoan da co tren web: POST /api/revolt upsert theo
@@ -431,15 +451,20 @@ def upload_db_accounts_to_web(conn, steam_path=None):
         # the id is not lost from the web note.
         resolved, _src = resolve_game_name(game_id, steam_path, game_name, username,
                                            steam_appid)
-        label = resolved or (game_name if game_name and
-                             str(game_name) != 'N/A' else None)
-        if not label and game_id and str(game_id) not in ('N/A', '0', 'None', ''):
-            label = f"App {game_id}"
+        # "App 2991" and "N/A" are placeholders this tool or RevoltG wrote when
+        # no name was known, so they must not fall through into the note as if
+        # they were one.
+        label = resolved if is_real_game_name(resolved) else game_name
+        if not is_real_game_name(label):
+            label = None
         bits = ['Steam']
         if label:
             bits.append(f'game:{label}')
-        if steam_id and str(steam_id) not in ('N/A', '0', 'None', ''):
-            bits.append(f'id:{steam_id}')
+        elif game_id and str(game_id) not in ('N/A', '0', 'None', ''):
+            # No name yet, so show the id RevoltG uses for it. The fresh-dump
+            # path writes "appid:" in the same situation, and the two have to
+            # agree or one account flips spelling between runs.
+            bits.append(f'appid:{game_id}')
         if vietrealm_upload_account(username, password, note=' | '.join(bits)):
             sent += 1
     if sent:
@@ -1249,7 +1274,11 @@ def resolve_game_name(game_id, steam_path=None, payload_name=None, username=None
     unknown rather than inventing a name.
     """
     if not game_id or str(game_id) in ('N/A', '0', 'None', ''):
-        return (payload_name or None), ('revolt' if payload_name else None)
+        # No id to resolve against, so the only thing left is what RevoltG
+        # said, and only if it actually said a name.
+        if is_real_game_name(payload_name):
+            return str(payload_name), 'revolt'
+        return None, None
 
     game_id = str(game_id)
     steam_appid = str(steam_appid) if steam_appid else ''
@@ -1259,16 +1288,16 @@ def resolve_game_name(game_id, steam_path=None, payload_name=None, username=None
     #    only meaningful together with the account it was read for.
     if username:
         pinned = load_account_game_names().get(str(username))
-        if pinned:
-            return pinned, 'account'
+        if is_real_game_name(pinned):
+            return str(pinned), 'account'
 
     # 2. User-supplied name wins over everything else.
     name = load_game_map().get(game_id)
-    if name:
-        return name, 'map'
+    if is_real_game_name(name):
+        return str(name), 'map'
 
     # 2. What RevoltG itself said about this account.
-    if payload_name and not str(payload_name).startswith('App '):
+    if is_real_game_name(payload_name):
         return str(payload_name), 'revolt'
 
     # 3. RevoltG's own catalogue, keyed by its own id.
@@ -2600,14 +2629,11 @@ def main():
             pw = info.get('password') or info.get('encrypted_password') or ''
             game = info.get('game_name') or ''
             gid = info.get('game_id') or ''
-            sid = info.get('steam_id64') or ''
             bits = ['Steam']
-            if game and not game.startswith('App '):
+            if is_real_game_name(game):
                 bits.append(f'game:{game}')
             elif gid and gid != 'N/A':
                 bits.append(f'appid:{gid}')
-            if sid and str(sid) not in ('N/A', '0', 'None', ''):
-                bits.append(f'id:{sid}')
             if vietrealm_upload_account(username, pw, note=' | '.join(bits)):
                 uploaded += 1
     else:
@@ -2622,9 +2648,6 @@ def main():
             bits = ['Battle.net']
             if btag and btag != 'N/A':
                 bits.append(f'btag:{btag}')
-            acc_id = bc.get('account_id') or ''
-            if acc_id and str(acc_id) not in ('N/A', '0', 'None', ''):
-                bits.append(f'id:{acc_id}')
             if vietrealm_upload_account(email, pw, email=email, note=' | '.join(bits)):
                 uploaded += 1
 
