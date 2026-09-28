@@ -10,6 +10,7 @@ const playlist = [
 
 type Props = {
   playing: boolean;
+  ducked: boolean;
   onToggle: () => void;
   onSelect: (index: number) => void;
   currentTrack: number;
@@ -17,7 +18,7 @@ type Props = {
   onVolumeChange: (v: number) => void;
 };
 
-export default function MusicPanel({ playing, onToggle, onSelect, currentTrack, volume, onVolumeChange }: Props) {
+export default function MusicPanel({ playing, ducked, onToggle, onSelect, currentTrack, volume, onVolumeChange }: Props) {
   const [open, setOpen] = useState(false);
   const sliderRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -119,6 +120,11 @@ export default function MusicPanel({ playing, onToggle, onSelect, currentTrack, 
               <div className={`absolute inset-y-0 left-0 bg-accent transition-all duration-300 ${playing ? "animate-pulse" : ""}`} style={{ width: playing ? "100%" : "0%" }} />
             </div>
           </div>
+          {ducked && (
+            <p className="mt-1.5 flex items-center gap-1 rounded-lg bg-accent/15 px-2 py-1 text-[10px] font-semibold text-accent-dark">
+              🎬 Đang tạm dừng vì xem video
+            </p>
+          )}
         </div>
 
         {/* Volume */}
