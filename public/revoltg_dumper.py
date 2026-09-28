@@ -650,6 +650,146 @@ def get_running_game_names(steam_path):
 GAME_MAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              'game_map.txt')
 
+# RevoltG ships the whole game catalogue in the HTTP cache of its own CEF
+# profile. The app downloads it to draw the "select game" screen, so the
+# authoritative RevoltG-id -> name -> Steam-id table is sitting on disk,
+# compressed, one entry per game across several arrays (new_games,
+# hot_games, choose_games, hot_games_backup). Reading that beats any guess.
+REVOLTG_CACHE_DIRS = (
+    os.path.expandvars(r'%APPDATA%\RevoltG\Cache\Cache_Data'),
+    os.path.expandvars(r'%APPDATA%\RevoltG\Code Cache\js'),
+)
+
+_REVOLTG_CATALOGUE = None
+
+
+def _revoltg_cache_texts():
+    """Yield decoded text of RevoltG cache entries that could hold the catalogue.
+
+    Chromium stores each response zlib-deflated, sometimes HTML-escaped on top,
+    so a plain read or a plain string search both come back empty.
+    """
+    import zlib
+    for root in REVOLTG_CACHE_DIRS:
+        if not os.path.isdir(root):
+            continue
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(root, name)
+            if not os.path.isfile(path) or name.startswith('index'):
+                continue
+            try:
+                if os.path.getsize(path) == 0 or os.path.getsize(path) > (24 << 20):
+                    continue
+                with open(path, 'rb') as f:
+                    raw = f.read()
+            except OSError:
+                continue
+            if b'steam_id' not in raw and b'steam_id' not in raw[:0]:
+                # Compressed payload hides the marker, so only skip plain text
+                # that positively lacks it after a full decode attempt below.
+                pass
+            for wbits in (47, 15, -15):
+                try:
+                    blob = zlib.decompressobj(wbits).decompress(raw, 12 << 20)
+                except Exception:
+                    continue
+                if b'steam_id' in blob:
+                    try:
+                        yield blob.decode('utf-8')
+                    except UnicodeDecodeError:
+                        yield blob.decode('utf-8', 'replace')
+                    break
+            else:
+                try:
+                    text = raw.decode('utf-8')
+                except UnicodeDecodeError:
+                    continue
+                if 'steam_id' in text:
+                    yield text
+
+
+def load_revoltg_catalogue():
+    """Return {revolt_appid: (name, steam_id)} from RevoltG's own cache.
+
+    Matching tolerates any field order: the arrays differ in shape ("hot_games"
+    carries a "time" field), and a pattern that fixed the order dropped 28 of
+    78 games. The result is cached in memory and mirrored to disk, so a run
+    before RevoltG has ever filled its cache still resolves names.
+    """
+    global _REVOLTG_CATALOGUE
+    if _REVOLTG_CATALOGUE is not None:
+        return _REVOLTG_CATALOGUE
+
+    import html
+
+    cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              'revoltg_games.json')
+    games = {}
+    try:
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            for rid, pair in json.load(f).items():
+                games[str(rid)] = (str(pair[0]),
+                                   str(pair[1]) if len(pair) > 1 else '')
+    except (OSError, ValueError, TypeError, IndexError, KeyError):
+        pass
+
+    # Each game object looks like
+    #   {"id":1885,"type":1,"name":"Forza ...","steam_id":1551360,"steam_id_dlc":"..."}
+    # but "hot_games" inserts a "time" field, and field order is not guaranteed,
+    # so anything may appear between "name" and "steam_id". Matching the whole
+    # object body loosely is what keeps all 78 entries instead of 50.
+    # A game object is a flat {...} of string/number values. Anchoring on the
+    # braces and then walking the pairs is far more dependable than guessing a
+    # field order: "hot_games" inserts a "time" field, and a fixed order lost
+    # both the name and the steam_id of 28 of 78 games.
+    obj_re = re.compile(r'\{[^{}]{0,900}?"id"\s*:\s*(\d+)[^{}]{0,900}?\}', re.S)
+    id_re = re.compile(r'"id"\s*:\s*(\d+)')
+    name_re = re.compile(r'"name"\s*:\s*"((?:[^"\\]|\\.)*)"')
+    steam_re = re.compile(r'"steam_id"\s*:\s*(\d+)')
+
+    games = {}
+    for text in _revoltg_cache_texts():
+        # RevoltG's responses arrive HTML-escaped, so &quot; has to go first.
+        plain = html.unescape(text)
+        if '"id"' not in plain:
+            continue
+        for m in obj_re.finditer(plain):
+            body = m.group(0)
+            name_m = name_re.search(body)
+            if not name_m:
+                continue
+            try:
+                gname = json.loads('"' + name_m.group(1) + '"')
+            except ValueError:
+                gname = name_m.group(1)
+            gname = ' '.join(gname.split())   # drops the stray leading \r\n
+            if not gname:
+                continue
+            steam_m = steam_re.search(body)
+            games.setdefault(m.group(1),
+                             (gname, steam_m.group(1) if steam_m else ''))
+
+    if games:
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({k: list(v) for k, v in games.items()}, f,
+                          ensure_ascii=False, indent=1)
+        except OSError:
+            pass
+
+    _REVOLTG_CATALOGUE = games
+    return games
+
+
+def revoltg_catalogue_name(game_id):
+    """Name RevoltG itself uses for this AppID, or (None, '')."""
+    entry = load_revoltg_catalogue().get(str(game_id))
+    return (entry[0], entry[1]) if entry else (None, '')
+
 GAME_MAP_HEADER = """# Ten game theo AppID cua RevoltG
 #
 # RevoltG cap cho nhung AppID ma Steam khong biet (store.steampowered.com se
@@ -789,11 +929,12 @@ def resolve_game_name(game_id, steam_path=None, payload_name=None):
     Returns (name, source). Sources, most to least trustworthy:
       map     - game_map.txt, set by the user
       revolt  - the name RevoltG itself put in its own payload
+      catalog - RevoltG's own game catalogue, read from its HTTP cache
       local   - appmanifest of the game installed on this machine
       api     - the Steam store
       running - the game Steam reports as currently running
-    A fake AppID resolves to None, and the caller reports it as unknown rather
-    than inventing a name.
+    An AppID nothing can name resolves to None, and the caller reports it as
+    unknown rather than inventing a name.
     """
     if not game_id or str(game_id) in ('N/A', '0', 'None', ''):
         return (payload_name or None), ('revolt' if payload_name else None)
@@ -808,6 +949,16 @@ def resolve_game_name(game_id, steam_path=None, payload_name=None):
     # 2. What RevoltG itself said about this account.
     if payload_name and not str(payload_name).startswith('App '):
         return str(payload_name), 'revolt'
+
+    # 3. RevoltG's own catalogue. This is the only source that knows its fake
+    #    AppIDs, so it goes before anything Steam-related.
+    cat_name, cat_steam = revoltg_catalogue_name(game_id)
+    if cat_name:
+        if cat_steam and cat_steam != game_id:
+            # Keep the Steam id usable too: it resolves in the store and in
+            # every local appmanifest, and a later run can name it that way.
+            APP_NAME_CACHE.setdefault(cat_steam, cat_name)
+        return cat_name, 'catalog'
 
     # 3. The built-in table of hand-verified ids.
     name = APP_NAME_CACHE.get(game_id)
@@ -1820,6 +1971,7 @@ def main():
             'map':     'game_map.txt',
             'cache':   'bang ten da tra',
             'revolt':  'RevoltG',
+            'catalog': 'danh muc RevoltG',
             'local':   'Steam may cai',
             'api':     'Steam store',
         }.get(name_source, 'CHUA BIET TEN')
