@@ -691,16 +691,74 @@ def remember_unresolved_appids(app_ids):
         return []
 
     try:
-        exists = os.path.exists(GAME_MAP_FILE)
-        with open(GAME_MAP_FILE, 'a', encoding='utf-8') as f:
-            if not exists:
-                f.write(GAME_MAP_HEADER)
-            f.write(f"\n# --- {datetime.now().strftime('%Y-%m-%d %H:%M')} ---\n")
-            for app_id in new:
-                f.write(f"{app_id} = \n")
+        # Written blank on purpose: it marks the id as "seen, still unnamed" so
+        # it is not re-listed on the next run.
+        _write_game_map({app_id: '' for app_id in new})
     except OSError as e:
         print(f"{C.DIM}    (khong ghi duoc game_map.txt: {e}){C.RESET}")
+        return []
     return new
+
+
+def _write_game_map(updates):
+    """Merge {appid: name} into game_map.txt, replacing lines already present.
+
+    Rewriting in place rather than appending keeps one line per AppID, so a
+    corrected name replaces the old one instead of leaving two entries and
+    making it unclear which one the loader picks up.
+    """
+    if not updates:
+        return []
+
+    lines = []
+    if os.path.exists(GAME_MAP_FILE):
+        with open(GAME_MAP_FILE, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    else:
+        lines = GAME_MAP_HEADER.rstrip('\n').splitlines()
+
+    applied, seen = [], set()
+    for i, line in enumerate(lines):
+        stripped = line.split('#', 1)[0].strip()
+        if '=' not in stripped:
+            continue
+        key = stripped.partition('=')[0].strip()
+        if key in updates:
+            lines[i] = f"{key} = {updates[key]}"
+            seen.add(key)
+            applied.append(key)
+
+    fresh = [k for k in sorted(updates) if k not in seen]
+    if fresh:
+        stamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        kind = 'cap nhat' if seen else 'AppID chua ro'
+        lines += ['', f'# --- {kind} {stamp} ---']
+        lines += [f"{k} = {updates[k]}" for k in fresh]
+
+    with open(GAME_MAP_FILE, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines).rstrip('\n') + '\n')
+    return applied + fresh
+
+
+def remember_learned_names(learned):
+    """Persist AppID -> name pairs learned from the game Steam says is running.
+
+    RevoltG labels an account with an AppID of its own that nothing else can
+    resolve. While the mirrored game is actually running, Steam reports the real
+    AppID and that one does resolve, so the pair can be written down once and
+    never needed again.
+    """
+    if not learned:
+        return []
+    known = load_game_map()
+    changed = {k: v for k, v in learned.items() if known.get(k) != v}
+    if not changed:
+        return []
+    try:
+        return _write_game_map(changed)
+    except OSError as e:
+        print(f"{C.DIM}    (khong ghi duoc game_map.txt: {e}){C.RESET}")
+        return []
 
 
 def resolve_game_name(game_id, steam_path=None, payload_name=None):
@@ -1615,15 +1673,23 @@ def main():
             lines.append(f"{'='*60}\n")
 
     running_appid = get_running_steam_appid()
+    running_name = None
     if running_appid and running_appid != '0':
-        running_name = get_running_game_names(steam_path)
-        shown = running_name.get(str(APP_ID_MAP.get(running_appid, running_appid)))
+        running_name = (get_running_game_names(steam_path)
+                        .get(str(APP_ID_MAP.get(running_appid, running_appid))))
         print(f"{C.GREEN}[+] Steam dang chay: AppID {running_appid}"
-              f"{' - ' + shown if shown else ''}{C.RESET}")
+              f"{' - ' + running_name if running_name else ''}{C.RESET}")
+        if not running_name:
+            # Steam chua tao appmanifest cho game nay (RevoltG chay offline
+            # mode) - thu hoi Steam store mot lan cho chac.
+            running_name = get_steam_app_name(running_appid, steam_path)
+            if running_name:
+                print(f"{C.GREEN}[+] Ten game: {running_name}{C.RESET}")
     else:
         print(f"{C.DIM}[*] Khong co game Steam nao dang chay (RunningAppID = 0).{C.RESET}")
 
     unnamed_appids = set()
+    learned = {}
     for i, (username, info) in enumerate(accounts.items(), 1):
         password = info.get('password', '')
         enc_pw = info.get('encrypted_password', '')
@@ -1638,13 +1704,21 @@ def main():
             game_id = running_appid
         else:
             game_id = mem_game_id
-            
+
         # Map spoofed ID to real ID
         if game_id in APP_ID_MAP:
             game_id = APP_ID_MAP[game_id]
             
         if not game_id:
             game_id = 'N/A'
+
+        # Tu hoc: game dang chay co ten, AppID RevoltG trong RAM thi khong ->
+        # ghi "AppID gia = ten that" vao game_map.txt de cac lan sau tool
+        # tra duoc ten ngay ca khi khong mo game.
+        if (running_name and mem_game_id
+                and str(mem_game_id) != str(running_appid)
+                and str(mem_game_id) not in ('N/A', '0', 'None', '')):
+            learned.setdefault(str(mem_game_id), running_name)
             
         # Tên game: ưu tiên game_map.txt, rồi tên RevoltG tự khai, rồi Steam
         # local/store. AppID giả của RevoltG không nguồn nào tra được -> ghi
@@ -1700,7 +1774,7 @@ def main():
         print(f"  {C.WHITE}Persona:       {C.CYAN}{persona}{C.RESET}")
         src_label = {
             'map':     'game_map.txt',
-            'cache':   'bang ten san co',
+            'cache':   'bang ten da tra',
             'revolt':  'RevoltG',
             'local':   'Steam may cai',
             'api':     'Steam store',
@@ -1770,6 +1844,15 @@ def main():
             for app_id in added:
                 print(f"{C.DIM}    {app_id}{C.RESET}")
             print(f"{C.DIM}    Mo {GAME_MAP_FILE}, them ten ben phai '=' roi chay lai.{C.RESET}")
+
+    # Ghi ten da tu hoc tu game Steam dang chay. Lan sau khong can mo game lai.
+    if learned:
+        new_pairs = remember_learned_names(learned)
+        if new_pairs:
+            print(f"\n{C.GREEN}[+] Da nho ten game:{C.RESET}")
+            for app_id in new_pairs:
+                print(f"{C.DIM}    AppID {app_id} = {learned[app_id]}{C.RESET}")
+            print(f"{C.DIM}    Luu vao game_map.txt, cac lan sau tu tra ra ten.{C.RESET}")
 
     # ============================================
     # Battle.net Output
