@@ -1585,11 +1585,14 @@ def main():
     # Output
     # ============================================
     
-    if not accounts and not bnet_accounts:
-        print(f"\n{C.RED}[!] No NEW credentials found.")
-        print(f"    Make sure RevoltG has completed a Steam/Battle.net login before running.{C.RESET}")
-        db_conn.close()
-        sys.exit(1)
+    no_new_accounts = not accounts and not bnet_accounts
+    if no_new_accounts:
+        # Khong thoat o day: buoc dong bo web ben duoi van phai chay de ten
+        # game nhap trong game_map.txt duoc day lai len vietrealm.asia. Thoat
+        # som se khiien "dien ten roi chay lai" khong bao gio co tac dung.
+        print(f"\n{C.YELLOW}[!] Khong co tai khoan MOI trong RAM.")
+        print(f"{C.DIM}    Hay mo RevoltG va dang nhap Steam/Battle.net truoc khi chay lai.{C.RESET}")
+        print(f"{C.DIM}    Van tiep tuc dong bo ten game len web.{C.RESET}")
 
     output_file      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'revoltg_accounts.txt')
     bnet_output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'revoltg_bnet_accounts.txt')
@@ -1601,15 +1604,16 @@ def main():
     print(f"{'='*60}{C.RESET}\n")
     
     lines = []
-    
+
     # Append mode for the text file so we don't overwrite previous dumps
-    if not os.path.exists(output_file):
-        lines.append(f"RevoltG Account Dump - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"{'='*60}\n")
-    else:
-        lines.append(f"\n\nRevoltG Account Dump - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"{'='*60}\n")
-    
+    if not no_new_accounts:
+        if not os.path.exists(output_file):
+            lines.append(f"RevoltG Account Dump - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            lines.append(f"{'='*60}\n")
+        else:
+            lines.append(f"\n\nRevoltG Account Dump - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            lines.append(f"{'='*60}\n")
+
     running_appid = get_running_steam_appid()
     if running_appid and running_appid != '0':
         running_name = get_running_game_names(steam_path)
@@ -1740,18 +1744,21 @@ def main():
         lines.append('')
     
     # Combo list
-    lines.append(f"\n{'='*60}")
-    lines.append("COMBO LIST (user:pass)")
-    lines.append(f"{'='*60}")
-    for username, info in accounts.items():
-        pw = info.get('password', info.get('encrypted_password', ''))
-        lines.append(f"{username}:{pw}")
+    if accounts:
+        lines.append(f"\n{'='*60}")
+        lines.append("COMBO LIST (user:pass)")
+        lines.append(f"{'='*60}")
+        for username, info in accounts.items():
+            pw = info.get('password', info.get('encrypted_password', ''))
+            lines.append(f"{username}:{pw}")
     
     # Write file (append mode so we don't overwrite)
-    with open(output_file, 'a', encoding='utf-8') as f:
-        f.write('\n'.join(lines) + '\n')
-
-    print(f"{C.GREEN}[+] Appended to: {output_file}{C.RESET}")
+    if lines:
+        with open(output_file, 'a', encoding='utf-8') as f:
+            f.write('\n'.join(lines) + '\n')
+        print(f"{C.GREEN}[+] Appended to: {output_file}{C.RESET}")
+    else:
+        print(f"{C.DIM}    Khong co tai khoan moi de ghi vao {os.path.basename(output_file)}{C.RESET}")
 
     # AppID RevoltG cap ma Steam khong biet -> ghi ra game_map.txt de user
     # dien ten mot lan, cac lan sau tool se tu tra ra ten.
