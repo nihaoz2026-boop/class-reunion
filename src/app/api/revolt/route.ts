@@ -38,6 +38,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing username" }, { status: 400 });
     }
 
+    const existing: any[] = (await redis.get(KEY)) || [];
+
+    // Upsert by username. The dumper skips anything the web already lists, so a
+    // plain append produced a second row for the same login every time a
+    // different build pushed it, and it also froze the game note at whatever
+    // was known on the first dump - a name filled in later could never land.
+    const key = String(username).trim().toLowerCase();
+    const dup = existing.findIndex(
+      (a: any) => String(a.username || "").trim().toLowerCase() === key
+    );
+
+    if (dup !== -1) {
+      const prev = existing[dup];
+      const updated = {
+        ...prev,
+        email: String(email || "").trim() || prev.email,
+        password: String(password || "").trim() || prev.password,
+        note: String(note || "").trim() || prev.note,
+        updated: new Date().toISOString().split("T")[0],
+      };
+      existing[dup] = updated;
+      await redis.set(KEY, existing);
+      return NextResponse.json({ ...updated, deduped: true });
+    }
+
     const account = {
       id: Date.now(),
       username: String(username).trim(),
@@ -47,7 +72,6 @@ export async function POST(request: Request) {
       created: new Date().toISOString().split("T")[0],
     };
 
-    const existing: unknown[] = (await redis.get(KEY)) || [];
     await redis.set(KEY, [...existing, account]);
 
     return NextResponse.json(account);

@@ -238,11 +238,16 @@ def sam_shop_upload_steam(accounts, price=None):
 
 
 def vietrealm_upload_account(username, password, email='', note=''):
-    """POST one account to vietrealm.asia /api/revolt (admin -> Tài khoản Revolt)."""
+    """POST one account to vietrealm.asia /api/revolt (admin -> Tài khoản Revolt).
+
+    The endpoint upserts on username, so this is safe to call for accounts the
+    web already has: a repeat call refreshes the game note instead of adding a
+    second row. Returns 'new', 'updated', or None on failure.
+    """
     if not VIETREALM_UPLOAD:
-        return False
+        return None
     if not username:
-        return False
+        return None
 
     payload = {
         'username': str(username).strip(),
@@ -259,14 +264,17 @@ def vietrealm_upload_account(username, password, email='', note=''):
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             if resp.status == 200:
-                print(f"{C.GREEN}[+] VietRealm saved: {payload['username']}{C.RESET}")
-                return True
+                body = json.loads(resp.read().decode('utf-8', errors='replace') or '{}')
+                was_update = bool(body.get('deduped'))
+                tag = 'cap nhat' if was_update else 'them moi'
+                print(f"{C.GREEN}[+] VietRealm {tag}: {payload['username']}{C.RESET}")
+                return 'updated' if was_update else 'new'
     except urllib.error.HTTPError as e:
         err_body = e.read().decode('utf-8', errors='replace') if e.fp else ''
         print(f"{C.RED}[!] VietRealm HTTP {e.code} ({payload['username']}): {err_body[:300]}{C.RESET}")
     except Exception as e:
         print(f"{C.RED}[!] VietRealm upload failed ({payload['username']}): {e}{C.RESET}")
-    return False
+    return None
 
 
 def vietrealm_existing_usernames():
@@ -351,12 +359,13 @@ def is_account_dumped(conn, username):
     c.execute("SELECT 1 FROM accounts WHERE username = ?", (username,))
     return c.fetchone() is not None
 
-def upload_db_accounts_to_web(conn, existing_on_web, steam_path=None):
-    """Push accounts already in the local DB that never made it onto the web.
+def upload_db_accounts_to_web(conn, steam_path=None):
+    """Re-send every account in the local DB to the web.
 
-    The scan skips accounts already in the DB, so an account dumped before the
-    web link existed would otherwise never be uploaded. This re-sends anything
-    the web does not have yet.
+    The scan skips accounts already in the DB, so without this an account
+    dumped before the web link existed would never be uploaded. Re-sending is
+    also how a game name learned later reaches the web: POST /api/revolt
+    upserts on username, so an existing row gets its note refreshed.
     """
     c = conn.cursor()
     try:
@@ -370,8 +379,9 @@ def upload_db_accounts_to_web(conn, existing_on_web, steam_path=None):
     for username, password, game_id, game_name, steam_id in rows:
         if not username or not password:
             continue
-        if str(username).strip() in existing_on_web:
-            continue
+        # Khong bo qua tai khoan da co tren web: POST /api/revolt upsert theo
+        # username, nen gui lai chi lam moi ghi chu (vd ten game vua dien trong
+        # game_map.txt) ma khong tao dong trung.
         # Re-resolve the name: a game_map.txt entry or a Steam API answer may
         # have turned up since the row was first written. An unnamed AppID keeps
         # its "App <id>" label so the id is not lost from the web note.
@@ -388,7 +398,7 @@ def upload_db_accounts_to_web(conn, existing_on_web, steam_path=None):
         if vietrealm_upload_account(username, password, note=' | '.join(bits)):
             sent += 1
     if sent:
-        print(f"{C.GREEN}[+] Uploaded {sent} account(s) from local DB to the web{C.RESET}")
+        print(f"{C.GREEN}[+] Sent {sent} account(s) from local DB to the web{C.RESET}")
     return sent
 
 def save_account_to_db(conn, info):
@@ -1850,19 +1860,22 @@ def main():
     # Upload to VietRealm web (vietrealm.asia -> admin "Tài khoản Revolt")
     print(f"\n{C.CYAN}[*] Uploading accounts to VietRealm ({VIETREALM_URL})...{C.RESET}")
 
+    # Keo danh sach hien co truoc de bao cao. POST /api/revolt tu upsert theo
+    # username nen khong can bo qua gi o phia duong.
     existing_on_web = vietrealm_existing_usernames()
+    if existing_on_web:
+        print(f"{C.DIM}    Web hien co {len(existing_on_web)} tai khoan.{C.RESET}")
     uploaded = 0
 
     # Accounts dumped before this link existed are already in the local DB, so the
-    # scan above skipped them. Push any of those the web still doesn't have.
-    uploaded += upload_db_accounts_to_web(db_conn, existing_on_web, steam_path)
+    # scan above skipped them. Re-send them too: the endpoint upserts on
+    # username, so this refreshes the game note instead of duplicating a row.
+    uploaded += upload_db_accounts_to_web(db_conn, steam_path)
 
     steam_upload = {}
     for username, info in (accounts or {}).items():
         pw = info.get('password') or info.get('encrypted_password') or ''
         if not username or not pw:
-            continue
-        if str(username).strip() in existing_on_web:
             continue
         steam_upload[username] = info
 
@@ -1882,12 +1895,10 @@ def main():
             if vietrealm_upload_account(username, pw, note=' | '.join(bits)):
                 uploaded += 1
     else:
-        print(f"{C.DIM}    No new Steam accounts to upload onto the web (already saved or no password){C.RESET}")
+        print(f"{C.DIM}    No Steam accounts to send to the web (no password){C.RESET}")
 
     if bnet_accounts:
         for email, bc in bnet_accounts.items():
-            if str(email).strip() in existing_on_web:
-                continue
             pw = bc.get('password') or ''
             if not pw:
                 continue
