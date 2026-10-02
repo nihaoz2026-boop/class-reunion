@@ -94,7 +94,29 @@ const groups: Group[] = [
     emoji: "📕",
     gradient: "from-rose-100 to-yellow-100",
     events: [
-      { title: "Bước vào lớp 9", photos: [{ id: 19, color: "bg-amber-100" }] },
+      {
+        title: "Bước vào lớp 9",
+        photos: [
+          {
+            id: 31,
+            color: "bg-amber-100",
+            type: "image",
+            src: "/photos/buoc-vao-lop-9a8.jpg",
+            label: "Bước vào lớp 9 9A8",
+            width: 1284,
+            height: 2282,
+          },
+          {
+            id: 32,
+            color: "bg-amber-100",
+            type: "image",
+            src: "/photos/buoc-vao-lop-9a8-2.jpg",
+            label: "Bước vào lớp 9 9A8 (2)",
+            width: 1284,
+            height: 2282,
+          },
+        ],
+      },
       { title: "Ôn thi cuối cấp", photos: [{ id: 20, color: "bg-blue-100" }] },
       { title: "Lớp học cuối cùng", photos: [{ id: 21, color: "bg-pink-100" }] },
       { title: "Về nguồn cuối năm", photos: [{ id: 22, color: "bg-emerald-100" }] },
