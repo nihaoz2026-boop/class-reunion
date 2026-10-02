@@ -73,7 +73,7 @@ export default function PhotoCard({ src, label, width, height, maxHeightVh = 68 
         )}
       </figure>
 
-      {/* Lightbox xem toan man hinh */}
+      {/* Lightbox xem toan man hinh — bam ra ngoai hoac Esc de dong */}
       {open && (
         <div
           className="fixed inset-0 z-[200] flex cursor-zoom-out items-center justify-center bg-black/85 p-3 backdrop-blur-sm sm:p-8"
@@ -86,15 +86,6 @@ export default function PhotoCard({ src, label, width, height, maxHeightVh = 68 
             onClick={(e) => e.stopPropagation()}
             className="animate-bounce-in max-h-full max-w-full cursor-default rounded-xl object-contain shadow-2xl sm:rounded-2xl"
           />
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Đóng"
-            className="btn-bubble absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full p-0 text-lg sm:right-5 sm:top-5 sm:h-12 sm:w-12 sm:text-xl"
-            style={{ padding: 0 }}
-          >
-            ✕
-          </button>
           {label && (
             <p className="pointer-events-none absolute inset-x-0 bottom-4 text-center text-xs font-bold text-white/90 sm:text-sm">
               📸 {label}
