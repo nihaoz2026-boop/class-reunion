@@ -38,7 +38,6 @@ export default function AdminPage() {
     "7A8": ["Năm học mới 7A8", "Giờ thực hành", "Chào mừng 20/11", "Cuối kỳ lớp 7"],
     "8A8": ["Mở đầu lớp 8", "Thi giữa kỳ", "20/11 lớp 8", "Tổng kết năm học"],
     "9A8": ["Bước vào lớp 9", "Ôn thi cuối cấp", "Lớp học cuối cùng", "Về nguồn cuối năm", "Trung Thu", "Chụp ảnh kỷ yếu", "Lễ tốt nghiệp THCS", "Ngày cuối cấp"],
-    "Hoạt động": ["Họp mặt lớp", "Phụ vụ cộng đồng"],
     "Tốt nghiệp": ["Lễ tốt nghiệp", "Chụp ảnh kỷ yếu"],
   };
 

@@ -14,7 +14,7 @@ export async function GET(request: Request) {
   if (denied) return denied;
   try {
     const redis = getRedis();
-    const groups = ["6A8", "7A8", "8A8", "9A8", "Hoạt động", "Tốt nghiệp"];
+    const groups = ["6A8", "7A8", "8A8", "9A8", "Tốt nghiệp"];
     const allPhotos: Record<string, Record<string, string[]>> = {};
 
     for (const g of groups) {

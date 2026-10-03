@@ -134,14 +134,6 @@ const groups: Group[] = [
     ],
   },
   {
-    name: "Hoạt động",
-    emoji: "🎭",
-    gradient: "from-lime-100 to-emerald-100",
-    events: [
-      { title: "Họp mặt lớp", photos: [{ id: 26, color: "bg-violet-100" }] },
-    ],
-  },
-  {
     name: "Tốt nghiệp",
     emoji: "🎓",
     gradient: "from-yellow-100 to-orange-100",
