@@ -138,7 +138,22 @@ const groups: Group[] = [
       { title: "Ôn thi cuối cấp", photos: [{ id: 20, color: "bg-blue-100" }] },
       { title: "Lớp học cuối cùng", photos: [{ id: 21, color: "bg-pink-100" }] },
       { title: "Về nguồn cuối năm", photos: [{ id: 22, color: "bg-emerald-100" }] },
-      { title: "Trung Thu", emoji: "🏮", photos: [{ id: 30, color: "bg-amber-100", type: "video", src: "/videos/trung-thu-9a8.mp4", label: "Video ăn trung thu 9A8" }] },
+      {
+        title: "Trung Thu",
+        emoji: "🏮",
+        photos: [
+          { id: 30, color: "bg-amber-100", type: "video", src: "/videos/trung-thu-9a8.mp4", label: "Video ăn trung thu 9A8" },
+          {
+            id: 103,
+            color: "bg-amber-100",
+            type: "image",
+            src: "/photos/trung-thu-9a8/anh-1.jpg",
+            label: "Trung Thu 9A8",
+            width: 913,
+            height: 1768,
+          },
+        ],
+      },
       { title: "Chụp ảnh kỷ yếu", photos: [{ id: 23, color: "bg-rose-100" }] },
       { title: "Lễ tốt nghiệp THCS 🎓", photos: [{ id: 24, color: "bg-yellow-100" }] },
       { title: "Ngày cuối cấp", photos: [{ id: 25, color: "bg-orange-100" }] },
