@@ -35,7 +35,21 @@ const groups: Group[] = [
     gradient: "from-amber-100 to-blue-100",
     events: [
       { title: "Ngày đầu nhập học", photos: [{ id: 1, color: "bg-amber-100" }] },
-      { title: "Lớp học đầu năm", photos: [{ id: 2, color: "bg-blue-100" }] },
+      {
+        title: "Lớp học đầu năm",
+        photos: [
+          { id: 2, color: "bg-blue-100" },
+          {
+            id: 106,
+            color: "bg-blue-100",
+            type: "image",
+            src: "/photos/lop-hoc-dau-nam-6a8/anh-1.jpg",
+            label: "Lớp học đầu năm 6A8",
+            width: 720,
+            height: 1290,
+          },
+        ],
+      },
       { title: "Kỷ niệm 20/11 năm nhất", photos: [{ id: 5, color: "bg-violet-100" }] },
       { title: "Học kỳ 1", photos: [{ id: 6, color: "bg-cyan-100" }] },
     ],
