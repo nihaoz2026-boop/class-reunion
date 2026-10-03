@@ -45,13 +45,15 @@ vercel ls class-reunion   # xem status: ● Ready = thành công
 
 ## 3. MẬT KHẨU QUẢN TRỊ
 
-| Gì | Giá trị |
+| Gì | Ở đâu |
 |---|---|
 | **Trang quản trị** | `vietrealm.asia/admin` |
-| **Mật khẩu** | `18022012` |
+| **Mật khẩu** | biến môi trường `ADMIN_PASSWORD` trên Vercel |
 
-**Không bao giờ** hardcode mật khẩu này vào code hoặc file public.
-Nó nằm trong Vercel env var `ADMIN_PASSWORD`.
+Xem giá trị: Vercel Dashboard → Project `class-reunion` → Settings → Environment Variables.
+
+**Không bao giờ** ghi mật khẩu này vào code hay file nào trong repo. Repo này
+**public** — ai có link cũng đọc được. Chỉ đọc qua `process.env.ADMIN_PASSWORD`.
 
 ---
 
@@ -102,8 +104,8 @@ class-reunion/
 Tạo file `.env.local` (KHÔNG commit lên Git):
 
 ```env
-# Bắt buộc — admin password
-ADMIN_PASSWORD=18022012
+# Bắt buộc — admin password (copy từ Vercel, đừng ghi thẳng giá trị vào đây)
+ADMIN_PASSWORD=
 
 # Bắt buộc — Redis để lưu dữ liệu
 UPSTASH_REDIS_REST_URL=https://your-redis-url.upstash.io
@@ -239,7 +241,7 @@ git push
 ## 8. QUY TẮC QUAN TRỌNG
 
 ### Về mật khẩu và key
-- **KHÔNG BAO GIỜ** commit mật khẩu admin (`18022012`) vào bất kỳ file nào trong repo.
+- **KHÔNG BAO GIỜ** commit mật khẩu admin vào bất kỳ file nào trong repo, kể cả file tài liệu. Repo public nên mọi thứ trong đó đều công khai.
 - **KHÔNG BAO GIỜ** hardcode SAM_SHOP_KEY trong code — đọc từ file `sam_shop.key` hoặc biến môi trường.
 - Key đặt trong `.gitignore`: `sam_shop.key`, `vietrealm.key`, `game_map.txt`, `revoltg_pages.json`, `revoltg_games.json`
 
@@ -282,7 +284,7 @@ C:\Users\WIN10\Downloads\Revoltg Dumper\
 ├── revoltg_accounts.db        ← database SQLite local
 ├── revoltg_accounts.txt       ← log các account đã dump
 ├── sam_shop.key               ← key SAM shop (gitignored)
-└── vietrealm.key              ← chứa 18022012 (gitignored)
+└── vietrealm.key              ← mật khẩu admin (gitignored, nằm ngoài repo)
 ```
 
 **Cách chạy:** double-click `CHAY DUATER.cmd` (tự xin quyền Administrator).
@@ -306,7 +308,7 @@ cp "C:\Users\WIN10\Downloads\Revoltg Dumper\revoltg_dumper.py" public/revoltg_du
 | PhotoCard | ✅ Hover zoom, bấm không mở lightbox |
 | Script dumper | ✅ Hoạt động, deploy tại `/revoltg_dumper.py` |
 | API `/api/revolt` | ✅ Nhận POST, dedupe by username |
-| Admin panel | ✅ Đăng nhập bằng `18022012` |
+| Admin panel | ✅ Đăng nhập bằng `ADMIN_PASSWORD` từ Vercel |
 
 ---
 
