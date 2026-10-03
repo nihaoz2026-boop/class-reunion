@@ -269,31 +269,37 @@ export default function VideoPlayer({ src, title }: Props) {
             </span>
 
             <div className="ml-auto flex items-center gap-1.5 sm:gap-2.5">
-              {/* Âm lượng */}
-              <button
-                type="button"
-                onClick={() => (muted || volume === 0 ? setMuted(false) : setMuted(true))}
+              {/* Âm lượng — vùng hover gồm CẢ nút lẫn thanh trượt.
+                  Nếu chỉ bắt hover trên nút, chuột chạy sang thanh sẽ bắn
+                  mouseleave nút => đóng thanh => nháy lặp. Thanh trượt nằm
+                  absolute (.vd-vol) nên không đẩy nút khi mở. */}
+              <div
+                className="relative shrink-0"
                 onMouseEnter={() => setVolOpen(true)}
                 onMouseLeave={() => setVolOpen(false)}
-                aria-label={muted ? "Bật tiếng" : "Tắt tiếng"}
-                className="vd-btn vd-btn-ghost h-7 w-7 shrink-0 text-[10px] sm:h-10 sm:w-10 sm:text-sm"
               >
-                {muted || volume === 0 ? "🔇" : "🔊"}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => (muted || volume === 0 ? setMuted(false) : setMuted(true))}
+                  aria-label={muted ? "Bật tiếng" : "Tắt tiếng"}
+                  className="vd-btn vd-btn-ghost h-7 w-7 shrink-0 text-[10px] sm:h-10 sm:w-10 sm:text-sm"
+                >
+                  {muted || volume === 0 ? "🔇" : "🔊"}
+                </button>
 
-              <div
-                className={`vd-track hidden sm:block ${volOpen ? "open" : ""}`}
-                style={{ height: 8, width: volOpen ? 62 : 0, opacity: volOpen ? 1 : 0 }}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                  setVolume(Math.round(ratio * 100) / 100);
-                  setMuted(false);
-                }}
-              >
-                <div className="vd-fill" style={{ width: `${muted ? 0 : volume * 100}%` }} />
-                <div className="vd-knob" style={{ left: `${muted ? 0 : volume * 100}%` }} />
+                <div
+                  className={`vd-vol hidden sm:block ${volOpen ? "open" : ""}`}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                    setVolume(Math.round(ratio * 100) / 100);
+                    setMuted(false);
+                  }}
+                >
+                  <div className="vd-fill" style={{ width: `${muted ? 0 : volume * 100}%` }} />
+                  <div className="vd-knob" style={{ left: `${muted ? 0 : volume * 100}%` }} />
+                </div>
               </div>
 
               {/* Toàn màn hình */}
