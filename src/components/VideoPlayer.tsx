@@ -34,8 +34,20 @@ export default function VideoPlayer({ src, title }: Props) {
   const [visible, setVisible] = useState(true);
   const [scrubbing, setScrubbing] = useState(false);
   const [volOpen, setVolOpen] = useState(false);
+  /* Khi đang kéo, vị trí nút lấy theo CON TRỎ chứ không theo currentTime.
+     Nếu lấy theo currentTime thì timeupdate của video liên tục giành lại vị
+     trí, nút chống lại con trỏ => kéo thấy giật. */
+  const [scrubPct, setScrubPct] = useState<number | null>(null);
 
-  const pct = duration > 0 ? Math.min(100, (current / duration) * 100) : 0;
+  /* Cờ đang-kéo và tỉ-lệ đang chờ đặt trong ref, KHÔNG đặt trong state.
+     onPointerMove đọc state sẽ bị stale closure: handler cũ vẫn thấy
+     scrubbing=false nên kéo không ăn. */
+  const scrubbingRef = useRef(false);
+  const scrubRatio = useRef(0);
+  const volDragRef = useRef(false);
+
+  const realPct = duration > 0 ? Math.min(100, (current / duration) * 100) : 0;
+  const pct = scrubPct ?? realPct;
 
   /* ---- hàm điều khiển ---- */
   const togglePlay = useCallback(() => {
@@ -58,16 +70,62 @@ export default function VideoPlayer({ src, title }: Props) {
     v.currentTime = Math.max(0, Math.min(d, v.currentTime + delta));
   }, [duration]);
 
-  const seekFromX = useCallback((clientX: number) => {
+  /* Tỉ-lệ 0..1 từ tọa độ X của con trỏ, so với bề rộng thanh */
+  const ratioFromX = useCallback((clientX: number): number | null => {
     const bar = barRef.current;
-    const v = videoRef.current;
-    if (!bar || !v) return;
+    if (!bar) return null;
     const rect = bar.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const d = isFinite(v.duration) && v.duration > 0 ? v.duration : duration;
-    const next = ratio * d;
-    v.currentTime = next;
-    setCurrent(next);
+    if (rect.width <= 0) return null;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  }, []);
+
+  /* Kéo thanh tua: KHÔNG gán currentTime khi đang kéo.
+     Gán currentTime = mỗi lần gọi video phải seek/giải mã lại, rất nặng và
+     gây khựng. Chỉ cập nhật vị trí hiển thị; đến khi thả tay mới seek thật. */
+  const beginScrub = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const ratio = ratioFromX(e.clientX);
+      if (ratio === null) return;
+      /* setPointerCapture có thể ném NotFoundError nếu con trỏ đã được nhả,
+     làm hỏng cả handler => kéo chết. Bọc lại. */
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        /* bỏ qua, vẫn kéo được nhờ các handler pointermove */
+      }
+      scrubbingRef.current = true;
+      scrubRatio.current = ratio;
+      setScrubPct(ratio * 100);
+      setScrubbing(true);
+    },
+    [ratioFromX],
+  );
+
+  const moveScrub = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!scrubbingRef.current) return;
+      const ratio = ratioFromX(e.clientX);
+      if (ratio === null) return;
+      scrubRatio.current = ratio;
+      setScrubPct(ratio * 100);
+    },
+    [ratioFromX],
+  );
+
+  const endScrub = useCallback(() => {
+    if (!scrubbingRef.current) return;
+    scrubbingRef.current = false;
+    setScrubbing(false);
+    const v = videoRef.current;
+    if (v) {
+      const d = isFinite(v.duration) && v.duration > 0 ? v.duration : duration;
+      const next = scrubRatio.current * d;
+      v.currentTime = next;
+      setCurrent(next);
+    }
+    setScrubPct(null);
   }, [duration]);
 
   const toggleFullscreen = useCallback(() => {
@@ -217,17 +275,10 @@ export default function VideoPlayer({ src, title }: Props) {
           <div
             ref={barRef}
             className="vd-track group mb-2.5"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-              setScrubbing(true);
-              seekFromX(e.clientX);
-            }}
-            onPointerMove={(e) => {
-              if (scrubbing) seekFromX(e.clientX);
-            }}
-            onPointerUp={() => setScrubbing(false)}
-            onPointerCancel={() => setScrubbing(false)}
+            onPointerDown={beginScrub}
+            onPointerMove={moveScrub}
+            onPointerUp={endScrub}
+            onPointerCancel={endScrub}
           >
             <div className="vd-fill" style={{ width: `${pct}%` }} />
             <div className={`vd-knob ${scrubbing ? "active" : ""}`} style={{ left: `${pct}%` }} />
@@ -291,10 +342,34 @@ export default function VideoPlayer({ src, title }: Props) {
                   className={`vd-vol hidden sm:block ${volOpen ? "open" : ""}`}
                   onPointerDown={(e) => {
                     e.stopPropagation();
+                    e.preventDefault();
+                    /* Lúc vừa mở thanh còn rộng ~0, chia cho 0 ra vô hạn
+                       => âm lượng nhảy lên 100%. Chặn lại. */
                     const rect = e.currentTarget.getBoundingClientRect();
+                    if (rect.width <= 0) return;
+                    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                    try {
+                      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                    } catch {
+                      /* bỏ qua */
+                    }
+                    volDragRef.current = true;
+                    setVolume(Math.round(ratio * 100) / 100);
+                    setMuted(false);
+                  }}
+                  onPointerMove={(e) => {
+                    if (!volDragRef.current) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    if (rect.width <= 0) return;
                     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
                     setVolume(Math.round(ratio * 100) / 100);
                     setMuted(false);
+                  }}
+                  onPointerUp={() => {
+                    volDragRef.current = false;
+                  }}
+                  onPointerCancel={() => {
+                    volDragRef.current = false;
                   }}
                 >
                   <div className="vd-fill" style={{ width: `${muted ? 0 : volume * 100}%` }} />

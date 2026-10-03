@@ -544,17 +544,9 @@ input, textarea, [contenteditable="true"] {
     opacity 0.16s ease-out;
 }
 
-/* Fill/knob tính theo % của thanh, nên khi thanh nở chúng nhảy theo.
-   Chỉ áp cho .vd-vol — thanh tua (progress bar) không được transition,
-   kéo sẽ bị trễ. */
-.vd-vol .vd-fill {
-  transition: width 0.34s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.vd-vol .vd-knob {
-  transition: left 0.08s ease-out,
-    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
+/* KHÔNG transition cho .vd-fill / .vd-knob bên trong .vd-vol.
+   Chúng tính theo % của thanh nên khi thanh nở chúng đã nở tỉ lệ, mượt sẵn.
+   Thêm transition vào đây làm chúng rượt đuổi sau con trỏ khi kéo => khựng. */
 
 /* Nhịp đập khi đang phát */
 @keyframes vd-beat {
