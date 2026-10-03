@@ -70,7 +70,21 @@ const groups: Group[] = [
     emoji: "📙",
     gradient: "from-violet-100 to-cyan-100",
     events: [
-      { title: "Mở đầu lớp 8", photos: [{ id: 13, color: "bg-amber-100" }] },
+      {
+        title: "Mở đầu lớp 8",
+        photos: [
+          { id: 13, color: "bg-amber-100" },
+          {
+            id: 102,
+            color: "bg-amber-100",
+            type: "image",
+            src: "/photos/mo-dau-lop-8a8/anh-1.jpg",
+            label: "Mở đầu lớp 8 8A8",
+            width: 1080,
+            height: 803,
+          },
+        ],
+      },
       {
         title: "Tổng kết năm học",
         photos: [
