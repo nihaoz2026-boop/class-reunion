@@ -71,8 +71,6 @@ const groups: Group[] = [
     gradient: "from-violet-100 to-cyan-100",
     events: [
       { title: "Mở đầu lớp 8", photos: [{ id: 13, color: "bg-amber-100" }] },
-      { title: "Thi giữa kỳ", photos: [{ id: 15, color: "bg-pink-100" }] },
-      { title: "20/11 lớp 8", photos: [{ id: 16, color: "bg-green-100" }] },
       {
         title: "Tổng kết năm học",
         photos: [
