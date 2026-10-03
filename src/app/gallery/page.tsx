@@ -85,6 +85,19 @@ const groups: Group[] = [
         ],
       },
       {
+        title: "Hội Xuân",
+        emoji: "🌸",
+        photos: [
+          {
+            id: 105,
+            color: "bg-amber-100",
+            type: "video",
+            src: "/videos/hoi-xuan-8a8.mp4",
+            label: "Video hội xuân 8A8",
+          },
+        ],
+      },
+      {
         title: "Tổng kết năm học",
         photos: [
           {
