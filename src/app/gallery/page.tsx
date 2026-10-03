@@ -34,7 +34,6 @@ const groups: Group[] = [
     emoji: "📗",
     gradient: "from-amber-100 to-blue-100",
     events: [
-      { title: "Ngày đầu nhập học", photos: [{ id: 1, color: "bg-amber-100" }] },
       {
         title: "Lớp học đầu năm",
         photos: [
@@ -47,6 +46,26 @@ const groups: Group[] = [
             label: "Lớp học đầu năm 6A8",
             width: 720,
             height: 1290,
+          },
+        ],
+      },
+      {
+        title: "Hội Xuân",
+        emoji: "🌸",
+        photos: [
+          {
+            id: 107,
+            color: "bg-blue-100",
+            type: "video",
+            src: "/videos/hoi-xuan-6a8.mp4",
+            label: "Video hội xuân 6A8",
+          },
+          {
+            id: 108,
+            color: "bg-blue-100",
+            type: "video",
+            src: "/videos/hoi-xuan-6a8-tap-duot.mp4",
+            label: "Video hội xuân 6A8 tập dượt",
           },
         ],
       },

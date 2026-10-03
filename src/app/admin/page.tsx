@@ -34,7 +34,7 @@ export default function AdminPage() {
   const [uploadEvent, setUploadEvent] = useState("Ngày đầu nhập học");
 
   const eventOptions: Record<string, string[]> = {
-    "6A8": ["Ngày đầu nhập học", "Lớp học đầu năm", "Kỷ niệm 20/11 năm nhất", "Học kỳ 1"],
+    "6A8": ["Lớp học đầu năm", "Hội Xuân", "Kỷ niệm 20/11 năm nhất", "Học kỳ 1"],
     "7A8": ["Năm học mới 7A8", "Chào mừng 20/11", "Cuối kỳ lớp 7"],
     "8A8": ["Mở đầu lớp 8", "Hội Xuân", "Tổng kết năm học"],
     "9A8": ["Bước vào lớp 9", "Ôn thi cuối cấp", "Lớp học cuối cùng", "Về nguồn cuối năm", "Trung Thu", "Chụp ảnh kỷ yếu", "Lễ tốt nghiệp THCS", "Ngày cuối cấp"],
