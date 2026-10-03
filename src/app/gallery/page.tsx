@@ -85,6 +85,13 @@ const groups: Group[] = [
             width: 2560,
             height: 1920,
           },
+          {
+            id: 101,
+            color: "bg-cyan-100",
+            type: "video",
+            src: "/videos/tong-ket-nam-hoc-8a8.mp4",
+            label: "Video tổng kết năm học 8A8",
+          },
         ],
       },
     ],
