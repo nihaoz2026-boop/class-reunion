@@ -116,6 +116,13 @@ const groups: Group[] = [
         title: "Bước vào lớp 9",
         photos: [
           {
+            id: 104,
+            color: "bg-amber-100",
+            type: "video",
+            src: "/videos/buoc-vao-lop-9a8.mp4",
+            label: "Video bước vào lớp 9 9A8",
+          },
+          {
             id: 31,
             color: "bg-amber-100",
             type: "image",
