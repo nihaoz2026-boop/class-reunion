@@ -60,7 +60,6 @@ const groups: Group[] = [
           },
         ],
       },
-      { title: "Giờ thực hành", photos: [{ id: 8, color: "bg-blue-100" }] },
       { title: "Chào mừng 20/11", photos: [{ id: 10, color: "bg-green-100" }] },
       { title: "Cuối kỳ lớp 7", photos: [{ id: 12, color: "bg-cyan-100" }] },
     ],
